@@ -11,10 +11,16 @@ from pandas import DataFrame
 from freqtrade.exceptions import OperationalException
 
 from freqtrade.freqai.data_drawer import FreqaiDataDrawer
-
+import numpy as np
+from typing import Callable
+import datetime
+import dateutil.parser
+import time
+import san
+from freqtrade.configuration import TimeRange
+from san import Batch
 
 logger = logging.getLogger(__name__)
-
 
 class FreqaiAPI:
     """
@@ -49,6 +55,7 @@ class FreqaiAPI:
             }
         self.api_dict: Dict[str, Any] = {}
         self.num_posts = 0
+        self.santiment_api_key = self.freqai_config['feature_parameters'].get('santiment_api_key')
 
     def start_fetching_from_api(self, dataframe: DataFrame, pair: str) -> DataFrame:
 
@@ -212,3 +219,24 @@ class FreqaiAPI:
         for expected_str in self.api_dict[pair]['returns']:
             return_str = expected_str['name']
             self.api_dict[pair][return_str] = 0
+
+    def download_external_data_from_santiment(self, timerange: TimeRange) -> None:
+
+        san.ApiConfig.api_key = self.santiment_api_key
+
+        batch = Batch()
+
+        batch.get(
+            "daily_active_addresses/santiment",
+            from_date="2018-06-01",
+            to_date="2018-06-05",
+            interval="1d"
+        )
+        batch.get(
+            "transaction_volume/santiment",
+            from_date="2018-06-01",
+            to_date="2018-06-05",
+            interval="1d"
+        )
+
+        [daa, trx_volume] = batch.execute()

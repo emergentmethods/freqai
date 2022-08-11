@@ -70,6 +70,7 @@ class FreqaiDataDrawer:
         self.historic_data: Dict[str, Dict[str, DataFrame]] = {}
         self.historic_predictions: Dict[str, DataFrame] = {}
         self.follower_dict: Dict[str, pair_info] = {}
+        self.historic_external_data: Dict[str, Any] = {}
         self.full_path = full_path
         self.follower_name: str = self.config.get("bot_name", "follower1")
         self.follower_dict_path = Path(

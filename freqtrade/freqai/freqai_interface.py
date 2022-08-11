@@ -305,6 +305,8 @@ class IFreqaiModel(ABC):
                 )
                 dk.download_all_data_for_training(data_load_timerange, strategy.dp)
                 self.dd.load_all_pair_histories(data_load_timerange, dk)
+                if self.freqai_info['feature_parameters'].get('include_santiment_data', False):
+                    self.api.download_external_data_from_santiment(data_load_timerange)
 
             if not self.scanning:
                 self.scanning = True
