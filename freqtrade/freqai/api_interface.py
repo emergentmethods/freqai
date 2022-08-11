@@ -1,6 +1,6 @@
 import logging
 import time
-from typing import Any, Callable, Dict
+from typing import Any, Callable, Dict, Tuple
 
 # import datetime
 import dateutil.parser
@@ -17,8 +17,10 @@ import datetime
 import dateutil.parser
 import time
 import san
+from san.graphql import execute_gql
 from freqtrade.configuration import TimeRange
 from san import Batch
+from freqtrade.exchange import timeframe_to_seconds
 
 logger = logging.getLogger(__name__)
 
@@ -221,63 +223,144 @@ class FreqaiAPI:
             return_str = expected_str['name']
             self.api_dict[pair][return_str] = 0
 
+    def create_metric_update_tracker(self) -> list:
+
+        metrics_to_get = ['active_addresses_1h', "daily_active_addresses", "transaction_volume",
+                          "active_withdrawals_5m"]  # "transaction_volume", "active_withdrawals_5m"]
+        slugs = ['bitcoin', 'ethereum']
+        metric_slug = []
+
+        for metric in metrics_to_get:
+            for slug in slugs:
+                metric_slug.append(f'{metric}/{slug}')
+                self.dd.metric_update_tracker[f'{metric}/{slug}'] = {
+                    'timestamp': 0, 'minInterval': self.config['timeframe']}
+        self.metric_slug_final = metric_slug.copy()
+
+        return metric_slug
+
+    def get_and_store_last_updated_timestamp(self, metric, slug):
+
+        execute_str = ('{'
+                       f'getMetric(metric: "{metric}"){{'
+                       f'lastDatetimeComputedAt(slug: "{slug}")'
+                       r'}}')
+        res = execute_gql(execute_str)
+        time_updated = res['getMetric']['lastDatetimeComputedAt']
+        self.dd.metric_update_tracker[metric]['timestamp'] = dateutil.parser.parse(time_updated).timestamp()
+
+    def check_if_needs_update(self, metric, slug) -> bool:
+
+        updated_ts = self.dd.metric_update_tracker[f'{metric}/{slug}']['timestamp']
+        interval = self.dd.metric_update_tracker[f'{metric}/{slug}']['minInterval']
+        to_update_ts = updated_ts + timeframe_to_seconds(interval)
+        now_timestamp = datetime.datetime.now().timestamp()
+
+        if now_timestamp < to_update_ts:
+            logger.info(f'Not pulling new data yet for {metric}/{slug}')
+            return False
+        else:
+            logger.info(f'Pulling new value for {metric}/{slug}')
+            self.dd.metric_update_tracker[f'{metric}/{slug}'] = to_update_ts
+            return True
+
+    def prepare_historic_dataframe(self, metric, slug, start, stop) -> bool
+        projects = san.get("projects/all")
+        skip = False
+        if not projects['slug'].str.contains(slug).any():
+            logger.warning(f'{slug} not in projects list.')
+            skip = True
+
+        metrics = san.available_metrics_for_slug(slug)
+
+        if metric not in metrics:
+            logger.warning(f'{metric} not in available {slug} metrics list. Skipping.')
+            self.metric_slug_final.remove(f'{metric}/{slug}')
+            skip = True
+
+        meta_dict = san.metadata(
+            metric,
+            arr=['isAccessible', 'isRestricted', 'restrictedFrom', 'restrictedTo', 'minInterval']
+            )
+
+        if not meta_dict['isAccessible']:
+            logger.warning(f'{metric} not accessible with current plan. Skipping.')
+            self.metric_slug_final.remove(f'{metric}/{slug}')
+            skip = True
+
+        if meta_dict['isRestricted']:
+            restricted_from = dateutil.parser.parse(meta_dict['restrictedFrom'])  # .timestamp()
+            restricted_to = dateutil.parser.parse(meta_dict['restrictedTo'])  # .timestamp()
+            if restricted_from.timestamp() > start.timestamp():
+                logger.warning(f'Not enough data at start for {metric}')
+                self.metric_slug_final.remove(f'{metric}/{slug}')
+                skip = True
+            if restricted_to.timestamp() < stop.timestamp():
+                logger.warning(f'Not enough data at end for {metric}')
+                self.metric_slug_final.remove(f'{metric}/{slug}')
+                skip = True
+
+        self.dd.metric_update_tracker[f'{metric}/{slug}']['minInterval'] = meta_dict['minInterval']
+
+        return skip
+
     def download_external_data_from_santiment(self, timerange: TimeRange) -> None:
 
         key = next(iter(self.dd.historic_data))
-        self.dd.historic_external_data = pd.DataFrame()
-        self.dd.historic_external_data['datetime'] = self.dd.historic_data[key][self.config['timeframe']]['date']
+        build_historic_df = False
+        if self.dd.historic_external_data.empty:
+            build_historic_df = True
+            self.dd.historic_external_data['datetime'] = self.dd.historic_data[key][self.config['timeframe']]['date']
+            metric_slug = self.create_metric_update_tracker()
+        else:
+            metric_slug = self.metric_slug_final
         start = datetime.datetime.utcfromtimestamp(timerange.startts)
         stop = datetime.datetime.utcfromtimestamp(timerange.stopts)
 
-        from_date = start.strftime("%Y-%m-%d")
-        to_date = stop.strftime("%Y-%m-%d")
+        # from_date = start.strftime("%Y-%m-%d-%H-%M")
+        # to_date = stop.strftime("%Y-%m-%d-%H-%M")
+        # pd.set_option('display.max_rows', 1000)
+        # start = datetime.datetime.now()
+        # stop = datetime.datetime.now()
 
         san.ApiConfig.api_key = self.santiment_api_key
-        metrics = san.available_metrics()
-        projects = san.get("projects/all")
-
-        metrics_to_get = ["daily_active_addresses", "transaction_volume", "active_withdrawals_5m"]
+        # metrics = san.available_metrics()
 
         batch = Batch()
 
-        for metric in metrics_to_get:
-            if metric not in metrics:
-                logger.warning(f'{metric} not in available metrics list. Skipping.')
-                continue
+        # build batch to send to sanpi
+        for key in metric_slug:
+            slug = key.split('/')[1]
+            metric = key.split('/')[0]
 
-            meta_dict = san.metadata(
-                metric,
-                arr=['availableSlugs', 'defaultAggregation', 'humanReadableName',
-                     'isAccessible', 'isRestricted', 'restrictedFrom', 'restrictedTo']
-            )
-
-            if not meta_dict['isAccessible']:
-                logger.warning(f'{metric} not accessible with current plan. Skipping.')
-                continue
-
-            if meta_dict['isRestricted']:
-                restricted_from = dateutil.parser.parse(meta_dict['restrictedFrom']).timestamp()
-                # restricted_to = dateutil.parser.parse(meta_dict['restrictedTo']).timestamp()
-                if restricted_from > timerange.startts:
-                    logger.warning(f'Not enough data at start for {metric}')
+            if build_historic_df:
+                skip = self.prepare_historic_dataframe(metric, slug)
+                if skip:
                     continue
-                # if restricted_to < timerange.stopts:
-                #     logger.warning(f'Not enough data at end for {metric}')
-                #     continue
+                self.get_and_store_last_updated_timestamp(metric, slug)
+            else:
+                if not self.check_if_needs_update(metric, slug):
+                    continue
 
             batch.get(
-                f'{metric}/santiment',
-                from_date=from_date,
-                to_date=to_date,
-                interval=self.config['timeframe']
+                f'{metric}/{slug}',
+                from_date=start,
+                to_date=stop,
+                interval=self.config['timeframe'],
             )
 
         response = batch.execute()
-        metric_dict = dict(zip(metrics_to_get, response))
+        metric_dict = dict(zip(self.metric_slug_final, response))
 
-        for metric in metrics_to_get:
-            # df.rename(columns={"A": "a", "B": "c"})
-            metric_dict[metric].rename(columns={'value': metric}, inplace=True)
-            self.dd.historic_external_data = pd.merge(
-                self.dd.historic_external_data, metric_dict[metric], how='outer', on='datetime').ffill()
-            # self.dd.historic_external_data.rename(columns={'value':metric})
+        if build_historic_df:
+            for metric in self.metric_slug_final:
+                metric_dict[metric].rename(columns={'value': metric}, inplace=True)
+                self.dd.historic_external_data = pd.merge(
+                    self.dd.historic_external_data, metric_dict[metric], how='outer', on='datetime').ffill()
+        else:
+            for metric in self.metric_slug_final:
+                metric_dict[metric].rename(columns={'value': metric}, inplace=True)
+            pd.concat([metric_dict[key] for key in metric_dict], axis=0)
+            df = pd.DataFrame.from_dict(metric_dict)
+            self.dd.historic_external_data = pd.concat(
+                [self.dd.historic_external_data, df], axis=0, ignore_index=True)

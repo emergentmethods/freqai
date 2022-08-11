@@ -92,6 +92,7 @@ class FreqaiDataDrawer:
                 "priority": 1, "first": True, "data_path": "", "extras": {}}
 
         self.historic_external_data: DataFrame = pd.DataFrame()
+        self.metric_update_tracker: Dict[str, Dict[str, Any]] = {}
 
     def load_drawer_from_disk(self):
         """
