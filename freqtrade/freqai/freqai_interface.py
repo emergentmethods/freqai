@@ -716,3 +716,21 @@ class IFreqaiModel(ABC):
         payload: Dict[Any, Any] = {}
 
         return payload
+
+    def fetch_predictions_for_getter(self, dataframe: DataFrame, metadata: dict):
+        # getter instance enters and exits here
+        if self.api_mode == 'getter':
+            dataframe = self.api.start_fetching_from_api(dataframe, metadata["pair"])
+            return dataframe
+        else:
+            logger.error('Strategy trying to get predictions from API, but not set to '
+                         'getter. Set freqai_api_mode to getter in config')
+
+    # @timer('function name', 's')
+    def post_predictions(self, dataframe: DataFrame, metadata: dict) -> None:
+
+        if self.live and self.api_mode == "poster":
+            self.api.post_predictions(dataframe, metadata["pair"])
+        else:
+            logger.error('Strategy trying to post predictions to DB, but not set to '
+                         'poster. Set freqai_api_mode to poster in config')

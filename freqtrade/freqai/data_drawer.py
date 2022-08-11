@@ -70,7 +70,6 @@ class FreqaiDataDrawer:
         self.historic_data: Dict[str, Dict[str, DataFrame]] = {}
         self.historic_predictions: Dict[str, DataFrame] = {}
         self.follower_dict: Dict[str, pair_info] = {}
-        self.historic_external_data: Dict[str, Any] = {}
         self.full_path = full_path
         self.follower_name: str = self.config.get("bot_name", "follower1")
         self.follower_dict_path = Path(
@@ -91,6 +90,8 @@ class FreqaiDataDrawer:
         self.empty_pair_dict: pair_info = {
                 "model_filename": "", "trained_timestamp": 0,
                 "priority": 1, "first": True, "data_path": "", "extras": {}}
+
+        self.historic_external_data: DataFrame = pd.DataFrame()
 
     def load_drawer_from_disk(self):
         """

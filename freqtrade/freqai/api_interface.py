@@ -22,6 +22,7 @@ from san import Batch
 
 logger = logging.getLogger(__name__)
 
+
 class FreqaiAPI:
     """
     Class designed to enable FreqAI "poster" instances to share predictions via API with other
@@ -222,21 +223,61 @@ class FreqaiAPI:
 
     def download_external_data_from_santiment(self, timerange: TimeRange) -> None:
 
+        key = next(iter(self.dd.historic_data))
+        self.dd.historic_external_data = pd.DataFrame()
+        self.dd.historic_external_data['datetime'] = self.dd.historic_data[key][self.config['timeframe']]['date']
+        start = datetime.datetime.utcfromtimestamp(timerange.startts)
+        stop = datetime.datetime.utcfromtimestamp(timerange.stopts)
+
+        from_date = start.strftime("%Y-%m-%d")
+        to_date = stop.strftime("%Y-%m-%d")
+
         san.ApiConfig.api_key = self.santiment_api_key
+        metrics = san.available_metrics()
+        projects = san.get("projects/all")
+
+        metrics_to_get = ["daily_active_addresses", "transaction_volume", "active_withdrawals_5m"]
 
         batch = Batch()
 
-        batch.get(
-            "daily_active_addresses/santiment",
-            from_date="2018-06-01",
-            to_date="2018-06-05",
-            interval="1d"
-        )
-        batch.get(
-            "transaction_volume/santiment",
-            from_date="2018-06-01",
-            to_date="2018-06-05",
-            interval="1d"
-        )
+        for metric in metrics_to_get:
+            if metric not in metrics:
+                logger.warning(f'{metric} not in available metrics list. Skipping.')
+                continue
 
-        [daa, trx_volume] = batch.execute()
+            meta_dict = san.metadata(
+                metric,
+                arr=['availableSlugs', 'defaultAggregation', 'humanReadableName',
+                     'isAccessible', 'isRestricted', 'restrictedFrom', 'restrictedTo']
+            )
+
+            if not meta_dict['isAccessible']:
+                logger.warning(f'{metric} not accessible with current plan. Skipping.')
+                continue
+
+            if meta_dict['isRestricted']:
+                restricted_from = dateutil.parser.parse(meta_dict['restrictedFrom']).timestamp()
+                # restricted_to = dateutil.parser.parse(meta_dict['restrictedTo']).timestamp()
+                if restricted_from > timerange.startts:
+                    logger.warning(f'Not enough data at start for {metric}')
+                    continue
+                # if restricted_to < timerange.stopts:
+                #     logger.warning(f'Not enough data at end for {metric}')
+                #     continue
+
+            batch.get(
+                f'{metric}/santiment',
+                from_date=from_date,
+                to_date=to_date,
+                interval=self.config['timeframe']
+            )
+
+        response = batch.execute()
+        metric_dict = dict(zip(metrics_to_get, response))
+
+        for metric in metrics_to_get:
+            # df.rename(columns={"A": "a", "B": "c"})
+            metric_dict[metric].rename(columns={'value': metric}, inplace=True)
+            self.dd.historic_external_data = pd.merge(
+                self.dd.historic_external_data, metric_dict[metric], how='outer', on='datetime').ffill()
+            # self.dd.historic_external_data.rename(columns={'value':metric})
