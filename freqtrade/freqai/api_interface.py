@@ -223,6 +223,9 @@ class FreqaiAPI:
             return_str = expected_str['name']
             self.api_dict[pair][return_str] = 0
 
+
+    # Santiment 
+
     def create_metric_update_tracker(self) -> list:
 
         metrics_to_get = ['active_addresses_1h', "daily_active_addresses", "transaction_volume",
@@ -264,7 +267,7 @@ class FreqaiAPI:
             self.dd.metric_update_tracker[f'{metric}/{slug}'] = to_update_ts
             return True
 
-    def prepare_historic_dataframe(self, metric, slug, start, stop) -> bool
+    def prepare_historic_dataframe(self, metric, slug, start, stop) -> bool:
         projects = san.get("projects/all")
         skip = False
         if not projects['slug'].str.contains(slug).any():
