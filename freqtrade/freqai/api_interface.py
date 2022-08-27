@@ -223,8 +223,7 @@ class FreqaiAPI:
             return_str = expected_str['name']
             self.api_dict[pair][return_str] = 0
 
-
-    # Santiment 
+    # Santiment
 
     def create_metric_update_tracker(self) -> list:
 
@@ -250,7 +249,8 @@ class FreqaiAPI:
                        r'}}')
         res = execute_gql(execute_str)
         time_updated = res['getMetric']['lastDatetimeComputedAt']
-        self.dd.metric_update_tracker[metric]['timestamp'] = dateutil.parser.parse(time_updated).timestamp()
+        self.dd.metric_update_tracker[f'{metric}/{slug}']['timestamp'] = dateutil.parser.parse(
+            time_updated).timestamp()
 
     def check_if_needs_update(self, metric, slug) -> bool:
 
@@ -272,14 +272,14 @@ class FreqaiAPI:
         skip = False
         if not projects['slug'].str.contains(slug).any():
             logger.warning(f'{slug} not in projects list.')
-            skip = True
+            return True
 
         metrics = san.available_metrics_for_slug(slug)
 
         if metric not in metrics:
             logger.warning(f'{metric} not in available {slug} metrics list. Skipping.')
             self.metric_slug_final.remove(f'{metric}/{slug}')
-            skip = True
+            return True
 
         meta_dict = san.metadata(
             metric,
@@ -289,19 +289,19 @@ class FreqaiAPI:
         if not meta_dict['isAccessible']:
             logger.warning(f'{metric} not accessible with current plan. Skipping.')
             self.metric_slug_final.remove(f'{metric}/{slug}')
-            skip = True
+            return True
 
         if meta_dict['isRestricted']:
             restricted_from = dateutil.parser.parse(meta_dict['restrictedFrom'])  # .timestamp()
             restricted_to = dateutil.parser.parse(meta_dict['restrictedTo'])  # .timestamp()
             if restricted_from.timestamp() > start.timestamp():
-                logger.warning(f'Not enough data at start for {metric}')
+                logger.warning(f'Not enough data at start for {metric}/{slug}')
                 self.metric_slug_final.remove(f'{metric}/{slug}')
-                skip = True
+                return True
             if restricted_to.timestamp() < stop.timestamp():
-                logger.warning(f'Not enough data at end for {metric}')
+                logger.warning(f'Not enough data at end for {metric}/{slug}')
                 self.metric_slug_final.remove(f'{metric}/{slug}')
-                skip = True
+                return True
 
         self.dd.metric_update_tracker[f'{metric}/{slug}']['minInterval'] = meta_dict['minInterval']
 
@@ -320,14 +320,7 @@ class FreqaiAPI:
         start = datetime.datetime.utcfromtimestamp(timerange.startts)
         stop = datetime.datetime.utcfromtimestamp(timerange.stopts)
 
-        # from_date = start.strftime("%Y-%m-%d-%H-%M")
-        # to_date = stop.strftime("%Y-%m-%d-%H-%M")
-        # pd.set_option('display.max_rows', 1000)
-        # start = datetime.datetime.now()
-        # stop = datetime.datetime.now()
-
         san.ApiConfig.api_key = self.santiment_api_key
-        # metrics = san.available_metrics()
 
         batch = Batch()
 
@@ -337,7 +330,7 @@ class FreqaiAPI:
             metric = key.split('/')[0]
 
             if build_historic_df:
-                skip = self.prepare_historic_dataframe(metric, slug)
+                skip = self.prepare_historic_dataframe(metric, slug, start, stop)
                 if skip:
                     continue
                 self.get_and_store_last_updated_timestamp(metric, slug)
