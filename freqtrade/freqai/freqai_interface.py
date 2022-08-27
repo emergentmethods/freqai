@@ -91,6 +91,7 @@ class IFreqaiModel(ABC):
         self.begin_time: float = 0
         self.begin_time_train: float = 0
         self.base_tf_seconds = timeframe_to_seconds(self.config['timeframe'])
+        self.add_santiment_data = self.freqai_info['feature_parameters'].get('inlclude_santiment_data', False)
 
         if self.freqai_info.get('freqai_api_url', None):
             self.api_mode = self.freqai_info.get('freqai_api_mode', 'getter')
@@ -287,6 +288,8 @@ class IFreqaiModel(ABC):
         # append the historic data once per round
         if self.dd.historic_data:
             self.dd.update_historic_data(strategy, dk)
+            self.update_external_data()
+
             logger.debug(f'Updating historic data on pair {metadata["pair"]}')
 
         if not self.follow_mode:
@@ -305,7 +308,7 @@ class IFreqaiModel(ABC):
                 )
                 dk.download_all_data_for_training(data_load_timerange, strategy.dp)
                 self.dd.load_all_pair_histories(data_load_timerange, dk)
-                if self.freqai_info['feature_parameters'].get('include_santiment_data', False):
+                if self.add_santiment_data:
                     self.api.download_external_data_from_santiment(data_load_timerange)
 
             if not self.scanning:
@@ -524,6 +527,15 @@ class IFreqaiModel(ABC):
 
         unfiltered_dataframe = dk.slice_dataframe(new_trained_timerange, unfiltered_dataframe)
 
+        if self.freqai_info['feature_parameters'].get('include_santiment_data', False):
+            san_data = self.dd.historic_external_data
+            san_data.rename(columns={'datetime': 'date'}, inplace=True)
+            san_data = dk.slice_dataframe(new_trained_timerange, san_data)
+            san_data = san_data.loc[:, san_data.columns != 'date']
+            san_data.columns = [f'%-{c}' for c in san_data]
+            san_data.set_index(unfiltered_dataframe.index, inplace=True)
+            unfiltered_dataframe = pd.concat([unfiltered_dataframe, san_data], axis=1)
+
         # find the features indicated by strategy and store in datakitchen
         dk.find_features(unfiltered_dataframe)
 
@@ -651,23 +663,6 @@ class IFreqaiModel(ABC):
                 self.train_time = 0
         return
 
-    def fetch_predictions_for_getter(self, dataframe: DataFrame, metadata: dict):
-        # getter instance enters and exits here
-        if self.api_mode == 'getter':
-            dataframe = self.api.start_fetching_from_api(dataframe, metadata["pair"])
-            return dataframe
-        else:
-            logger.error('Strategy trying to get predictions from API, but not set to '
-                         'getter. Set freqai_api_mode to getter in config')
-
-    # @timer('function name', 's')
-    def post_predictions(self, dataframe: DataFrame, metadata: dict) -> None:
-
-        if self.live and self.api_mode == "poster":
-            self.api.post_predictions(dataframe, metadata["pair"])
-        else:
-            logger.error('Strategy trying to post predictions to DB, but not set to '
-                         'poster. Set freqai_api_mode to poster in config')
     # Following methods which are overridden by user made prediction models.
     # See freqai/prediction_models/CatboostPredictionModel.py for an example.
 
@@ -734,3 +729,10 @@ class IFreqaiModel(ABC):
         else:
             logger.error('Strategy trying to post predictions to DB, but not set to '
                          'poster. Set freqai_api_mode to poster in config')
+
+    def update_external_data(self, dk):
+        # check and update external data once per candle.
+        size_hist = len(self.dd.historic_data[dk.pair][self.config['timeframe']])
+        size_hist_ext = len(self.dd.historic_external_data)
+        if size_hist > size_hist_ext and self.add_santiment_data:
+            self.api.download_external_data_from_santiment()

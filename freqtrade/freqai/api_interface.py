@@ -14,6 +14,7 @@ from freqtrade.freqai.data_drawer import FreqaiDataDrawer
 import numpy as np
 from typing import Callable
 import datetime
+from datetime import timedelta
 import dateutil.parser
 import time
 import san
@@ -227,9 +228,9 @@ class FreqaiAPI:
 
     def create_metric_update_tracker(self) -> list:
 
-        metrics_to_get = ['active_addresses_1h', "daily_active_addresses", "transaction_volume",
-                          "active_withdrawals_5m"]  # "transaction_volume", "active_withdrawals_5m"]
-        slugs = ['bitcoin', 'ethereum']
+        metrics_to_get = [ "daily_active_addresses", "transaction_volume",
+                          "active_withdrawals_5m"]  # "daily_active_addresses", 'active_addresses_1h', "transaction_volume", "active_withdrawals_5m"]
+        slugs = ['santiment'] # ['bitcoin', 'ethereum']
         metric_slug = []
 
         for metric in metrics_to_get:
@@ -249,23 +250,24 @@ class FreqaiAPI:
                        r'}}')
         res = execute_gql(execute_str)
         time_updated = res['getMetric']['lastDatetimeComputedAt']
-        self.dd.metric_update_tracker[f'{metric}/{slug}']['timestamp'] = dateutil.parser.parse(
-            time_updated).timestamp()
+        self.dd.metric_update_tracker[f'{metric}/{slug}']['timestamp'] = int(dateutil.parser.parse(
+            time_updated).timestamp())
 
-    def check_if_needs_update(self, metric, slug) -> bool:
+    def check_if_needs_update(self, metric, slug):
 
         updated_ts = self.dd.metric_update_tracker[f'{metric}/{slug}']['timestamp']
         interval = self.dd.metric_update_tracker[f'{metric}/{slug}']['minInterval']
-        to_update_ts = updated_ts + timeframe_to_seconds(interval)
-        now_timestamp = datetime.datetime.now().timestamp()
+        to_update_ts = int(updated_ts + timeframe_to_seconds(interval))
+        now_timestamp = int(datetime.datetime.now().timestamp())
 
         if now_timestamp < to_update_ts:
-            logger.info(f'Not pulling new data yet for {metric}/{slug}')
-            return False
+            until_update = (to_update_ts - now_timestamp) / 3600
+            logger.info(f'Not pulling new data yet for {metric}/{slug}, still {until_update:.2f} hours.')
+            return None
         else:
             logger.info(f'Pulling new value for {metric}/{slug}')
             self.dd.metric_update_tracker[f'{metric}/{slug}'] = to_update_ts
-            return True
+            return datetime.datetime.utcfromtimestamp(updated_ts)
 
     def prepare_historic_dataframe(self, metric, slug, start, stop) -> bool:
         projects = san.get("projects/all")
@@ -307,7 +309,7 @@ class FreqaiAPI:
 
         return skip
 
-    def download_external_data_from_santiment(self, timerange: TimeRange) -> None:
+    def download_external_data_from_santiment(self, timerange: TimeRange = TimeRange()) -> None:
 
         key = next(iter(self.dd.historic_data))
         build_historic_df = False
@@ -315,10 +317,11 @@ class FreqaiAPI:
             build_historic_df = True
             self.dd.historic_external_data['datetime'] = self.dd.historic_data[key][self.config['timeframe']]['date']
             metric_slug = self.create_metric_update_tracker()
+            start = datetime.datetime.utcfromtimestamp(timerange.startts)
+            stop = datetime.datetime.utcfromtimestamp(timerange.stopts)
         else:
             metric_slug = self.metric_slug_final
-        start = datetime.datetime.utcfromtimestamp(timerange.startts)
-        stop = datetime.datetime.utcfromtimestamp(timerange.stopts)
+            stop = datetime.datetime.now()
 
         san.ApiConfig.api_key = self.santiment_api_key
 
@@ -335,7 +338,8 @@ class FreqaiAPI:
                     continue
                 self.get_and_store_last_updated_timestamp(metric, slug)
             else:
-                if not self.check_if_needs_update(metric, slug):
+                start = self.check_if_needs_update(metric, slug)
+                if not start:
                     continue
 
             batch.get(
@@ -345,14 +349,21 @@ class FreqaiAPI:
                 interval=self.config['timeframe'],
             )
 
-        response = batch.execute()
-        metric_dict = dict(zip(self.metric_slug_final, response))
+        if batch.queries:
+            response = batch.execute()
+            metric_dict = dict(zip(self.metric_slug_final, response))
+        else:
+            logger.info('Nothing to fetch externally, ffilling dataframe')
+            self.ffill_historic_values()
+            return
 
         if build_historic_df:
             for metric in self.metric_slug_final:
                 metric_dict[metric].rename(columns={'value': metric}, inplace=True)
                 self.dd.historic_external_data = pd.merge(
-                    self.dd.historic_external_data, metric_dict[metric], how='outer', on='datetime').ffill()
+                    self.dd.historic_external_data, metric_dict[metric],
+                    how='outer', on='datetime'
+                    ).ffill()
         else:
             for metric in self.metric_slug_final:
                 metric_dict[metric].rename(columns={'value': metric}, inplace=True)
@@ -360,3 +371,17 @@ class FreqaiAPI:
             df = pd.DataFrame.from_dict(metric_dict)
             self.dd.historic_external_data = pd.concat(
                 [self.dd.historic_external_data, df], axis=0, ignore_index=True)
+            self.dd.historic_external_data.fillna(method='ffill', inplace=True)
+
+    def ffill_historic_values(self):
+
+        index = self.dd.historic_external_data.index[-1:]
+        columns = self.dd.historic_external_data.columns
+        df = self.dd.historic_external_data
+        new_date = df['datetime'].iloc[-1] + timedelta(seconds=timeframe_to_seconds(self.config['timeframe']))
+        last_row = pd.DataFrame(np.nan, index=index, columns=columns)
+        self.dd.historic_external_data = pd.concat(
+            [self.dd.historic_external_data, last_row], ignore_index=True, axis=0)
+        self.dd.historic_external_data.iloc[-1] = df.iloc[-1]
+        self.dd.historic_external_data['datetime'].iloc[-1] = new_date
+        return
