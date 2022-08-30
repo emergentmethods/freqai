@@ -40,7 +40,7 @@ FreqAI trains a model to predict the target values based on the input of custom 
 
 An overview of the algorithm is shown below, explaining the data processing pipeline and the model usage. 
 
-![freqai-algo](assets/freqai_algo.png)
+![freqai-algo](assets/freqai_algo.jpg)
 
 ### Important machine learning vocabulary
 
@@ -113,6 +113,9 @@ Mandatory parameters are marked as **Required**, which means that they are requi
 | `use_SVM_to_remove_outliers` | Train a support vector machine to detect and remove outliers from the training data set, as well as from incoming data points. See details about how it works [here](#removing-outliers-using-a-support-vector-machine-svm). <br> **Datatype:** Boolean.
 | `svm_params` | All parameters available in Sklearn's `SGDOneClassSVM()`. See details about some select parameters [here](#removing-outliers-using-a-support-vector-machine-svm). <br> **Datatype:** Dictionary.
 | `use_DBSCAN_to_remove_outliers` | Cluster data using DBSCAN to identify and remove outliers from training and prediction data. See details about how it works [here](#removing-outliers-with-dbscan). <br> **Datatype:** Boolean. 
+| `outlier_protection_percentage` | If more than `outlier_protection_percentage` fraction of points are removed as outliers, FreqAI will log a warning message and ignore outlier detection while keeping the original dataset intact. <br> **Datatype:** float. Default: `30`
+| `reverse_train_test_order` | If true, FreqAI will train on the latest data split and test on historical split of the data. This allows the model to be trained up to the most recent data point, while avoiding overfitting. However, users should be careful to understand unorthodox nature of this parameter before employing it. <br> **Datatype:** bool. Default: False
+| `inlier_metric_window` | If set, FreqAI will add the `inlier_metric` to the training feature set and set the lookback to be the `inlier_metric_window`. Details of how the `inlier_metric` is computed can be found [here](#using-the-inliermetric) <br> **Datatype:** int. Default: 0
 |  |  **Data split parameters**
 | `data_split_parameters` | Include any additional parameters available from Scikit-learn `test_train_split()`, which are shown [here](https://scikit-learn.org/stable/modules/generated/sklearn.model_selection.train_test_split.html) (external website). <br> **Datatype:** Dictionary.
 | `test_size` | Fraction of data that should be used for testing instead of training. <br> **Datatype:** Positive float < 1.
@@ -468,7 +471,7 @@ Additionally, the example classifier models do not accommodate multiple labels, 
 
 There are two ways to train and deploy an adaptive machine learning model. FreqAI enables live deployment as well as backtesting analyses. In both cases, a model is trained periodically, as shown in the following figure.
 
-![freqai-window](assets/freqai_moving-window.png)
+![freqai-window](assets/freqai_moving-window.jpg)
 
 ### Running the model live
 
@@ -634,6 +637,18 @@ testing; the other points are used for training.
 
 The test data is used to evaluate the performance of the model after training. If the test score is high, the model is able to capture the behavior of the data well. If the test score is low, either the model either does not capture the complexity of the data, the test data is significantly different from the train data, or a different model should be used. 
 
+### Using the `inlier_metric`
+
+The `inlier_metric` is a metric aimed at quantifying how different a prediction data point is from the most recent historic data points. 
+
+User can set `inlier_metric_window` to set the look back window. FreqAI will compute the distance between the present prediction point and each of the previous data points (total of `inlier_metric_window` points). 
+
+This function goes one step further - during training, it computes the `inlier_metric` for all training data points and builds weibull distributions for each each lookback point. The cumulative distribution function for the weibull distribution is used to produce a quantile for each of the data points. The quantiles for each lookback point are averaged to create the `inlier_metric`. 
+
+FreqAI adds this `inlier_metric` score to the training features! In other words, your model is trained to recognize how this temporal inlier metric is related to the user set labels. 
+
+This function does **not** remove outliers from the data set.
+
 ### Controlling the model learning process
 
 Model training parameters are unique to the machine learning library selected by the user. FreqAI allows the user to set any parameter for any library using the `model_training_parameters` dictionary in the user configuration file. The example configuration file (found in `config_examples/config_freqai.example.json`) show some of the example parameters associated with `Catboost` and `LightGBM`, but the user can add any parameters available in those libraries.
@@ -647,7 +662,7 @@ $$ W_i = \exp(\frac{-i}{\alpha*n}) $$
 
 where $W_i$ is the weight of data point $i$ in a total set of $n$ data points. Below is a figure showing the effect of different weight factors on the data points (candles) in a feature set.
 
-![weight-factor](assets/freqai_weight-factor.png)
+![weight-factor](assets/freqai_weight-factor.jpg)
 
 `train_test_split()` has a parameters called `shuffle` that allows the user to keep the data unshuffled. This is particularly useful to avoid biasing training with temporally auto-correlated data.
 
@@ -690,7 +705,7 @@ The user can tweak the DI through the `DI_threshold` to increase or decrease the
 
 Below is a figure that describes the DI for a 3D data set.
 
-![DI](assets/freqai_DI.png)
+![DI](assets/freqai_DI.jpg)
 
 #### Removing outliers using a Support Vector Machine (SVM)
 
@@ -727,7 +742,7 @@ DBSCAN is an unsupervised machine learning algorithm that clusters data without 
 
 Given a number of data points $N$, and a distance $\varepsilon$, DBSCAN clusters the data set by setting all data points that have $N-1$ other data points within a distance of $\varepsilon$ as *core points*. A data point that is within a distance of $\varepsilon$ from a *core point* but that does not have $N-1$ other data points within a distance of $\varepsilon$ from itself is considered an *edge point*. A cluster is then the collection of *core points* and *edge points*. Data points that have no other data points at a distance $<\varepsilon$ are considered outliers. The figure below shows a cluster with $N = 3$.
 
-![dbscan](assets/freqai_dbscan.png)
+![dbscan](assets/freqai_dbscan.jpg)
 
 FreqAI uses `sklearn.cluster.DBSCAN` (details are available on scikit-learn's webpage [here](#https://scikit-learn.org/stable/modules/generated/sklearn.cluster.DBSCAN.html)) with `min_samples` ($N$) taken as double the no. of user-defined features, and `eps` ($\varepsilon$) taken as the longest distance in the *k-distance graph* computed from the nearest neighbors in the pairwise distances of all data points in the feature set.
 

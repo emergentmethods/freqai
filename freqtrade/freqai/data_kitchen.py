@@ -168,9 +168,17 @@ class FreqaiDataKitchen:
             train_labels = labels
             train_weights = weights
 
-        return self.build_data_dictionary(
-            train_features, test_features, train_labels, test_labels, train_weights, test_weights
-        )
+        # Simplest way to reverse the order of training and test data:
+        if self.freqai_config['feature_parameters'].get('reverse_train_test_order', False):
+            return self.build_data_dictionary(
+                test_features, train_features, test_labels,
+                train_labels, test_weights, train_weights
+                )
+        else:
+            return self.build_data_dictionary(
+                train_features, test_features, train_labels,
+                test_labels, train_weights, test_weights
+            )
 
     def filter_features(
         self,
@@ -513,6 +521,18 @@ class FreqaiDataKitchen:
 
         return avg_mean_dist
 
+    def get_outlier_percentage(self, dropped_pts: npt.NDArray) -> float:
+        """
+        Check if more than X% of points werer dropped during outlier detection.
+        """
+        outlier_protection_pct = self.freqai_config["feature_parameters"].get(
+            "outlier_protection_percentage", 30)
+        outlier_pct = (dropped_pts.sum() / len(dropped_pts)) * 100
+        if outlier_pct >= outlier_protection_pct:
+            return outlier_pct
+        else:
+            return 0.0
+
     def use_SVM_to_remove_outliers(self, predict: bool) -> None:
         """
         Build/inference a Support Vector Machine to detect outliers
@@ -550,8 +570,17 @@ class FreqaiDataKitchen:
                 self.data_dictionary["train_features"]
             )
             y_pred = self.svm_model.predict(self.data_dictionary["train_features"])
-            dropped_points = np.where(y_pred == -1, 0, y_pred)
+            kept_points = np.where(y_pred == -1, 0, y_pred)
             # keep_index = np.where(y_pred == 1)
+            outlier_pct = self.get_outlier_percentage(1 - kept_points)
+            if outlier_pct:
+                logger.warning(
+                        f"SVM detected {outlier_pct:.2f}% of the points as outliers. "
+                        f"Keeping original dataset."
+                )
+                self.svm_model = None
+                return
+
             self.data_dictionary["train_features"] = self.data_dictionary["train_features"][
                 (y_pred == 1)
             ]
@@ -563,7 +592,7 @@ class FreqaiDataKitchen:
             ]
 
             logger.info(
-                f"SVM tossed {len(y_pred) - dropped_points.sum()}"
+                f"SVM tossed {len(y_pred) - kept_points.sum()}"
                 f" train points from {len(y_pred)} total points."
             )
 
@@ -572,7 +601,7 @@ class FreqaiDataKitchen:
             # to reduce code duplication
             if self.freqai_config['data_split_parameters'].get('test_size', 0.1) != 0:
                 y_pred = self.svm_model.predict(self.data_dictionary["test_features"])
-                dropped_points = np.where(y_pred == -1, 0, y_pred)
+                kept_points = np.where(y_pred == -1, 0, y_pred)
                 self.data_dictionary["test_features"] = self.data_dictionary["test_features"][
                     (y_pred == 1)
                 ]
@@ -583,7 +612,7 @@ class FreqaiDataKitchen:
                 ]
 
             logger.info(
-                f"SVM tossed {len(y_pred) - dropped_points.sum()}"
+                f"SVM tossed {len(y_pred) - kept_points.sum()}"
                 f" test points from {len(y_pred)} total points."
             )
 
@@ -604,6 +633,8 @@ class FreqaiDataKitchen:
         from math import cos, sin
 
         if predict:
+            if not self.data['DBSCAN_eps']:
+                return
             train_ft_df = self.data_dictionary['train_features']
             pred_ft_df = self.data_dictionary['prediction_features']
             num_preds = len(pred_ft_df)
@@ -635,8 +666,8 @@ class FreqaiDataKitchen:
                     cos(angle) * (point[1] - origin[1])
                 return (x, y)
 
-            MinPts = len(self.data_dictionary['train_features'].columns) * 2
-            # measure pairwise distances to train_features.shape[1]*2 nearest neighbours
+            MinPts = int(len(self.data_dictionary['train_features'].index) * 0.25)
+            # measure pairwise distances to nearest neighbours
             neighbors = NearestNeighbors(
                 n_neighbors=MinPts, n_jobs=self.thread_count)
             neighbors_fit = neighbors.fit(self.data_dictionary['train_features'])
@@ -667,6 +698,15 @@ class FreqaiDataKitchen:
             self.data['DBSCAN_min_samples'] = MinPts
             dropped_points = np.where(clustering.labels_ == -1, 1, 0)
 
+            outlier_pct = self.get_outlier_percentage(dropped_points)
+            if outlier_pct:
+                logger.warning(
+                        f"DBSCAN detected {outlier_pct:.2f}% of the points as outliers. "
+                        f"Keeping original dataset."
+                )
+                self.data['DBSCAN_eps'] = 0
+                return
+
             self.data_dictionary['train_features'] = self.data_dictionary['train_features'][
                 (clustering.labels_ != -1)
             ]
@@ -682,6 +722,111 @@ class FreqaiDataKitchen:
                 f" train points from {len(clustering.labels_)}"
             )
 
+        return
+
+    def compute_inlier_metric(self, set_='train') -> None:
+        """
+
+        Compute inlier metric from backwards distance distributions.
+        This metric defines how well features from a timepoint fit
+        into previous timepoints.
+        """
+
+        import scipy.stats as ss
+
+        no_prev_pts = self.freqai_config["feature_parameters"]["inlier_metric_window"]
+
+        if set_ == 'train':
+            compute_df = copy.deepcopy(self.data_dictionary['train_features'])
+        elif set_ == 'test':
+            compute_df = copy.deepcopy(self.data_dictionary['test_features'])
+        else:
+            compute_df = copy.deepcopy(self.data_dictionary['prediction_features'])
+
+        compute_df_reindexed = compute_df.reindex(
+            index=np.flip(compute_df.index)
+        )
+
+        pairwise = pd.DataFrame(
+            np.triu(
+                pairwise_distances(compute_df_reindexed, n_jobs=self.thread_count)
+            ),
+            columns=compute_df_reindexed.index,
+            index=compute_df_reindexed.index
+        )
+        pairwise = pairwise.round(5)
+
+        column_labels = [
+            '{}{}'.format('d', i) for i in range(1, no_prev_pts + 1)
+        ]
+        distances = pd.DataFrame(
+            columns=column_labels, index=compute_df.index
+        )
+
+        for index in compute_df.index[no_prev_pts:]:
+            current_row = pairwise.loc[[index]]
+            current_row_no_zeros = current_row.loc[
+                :, (current_row != 0).any(axis=0)
+            ]
+            distances.loc[[index]] = current_row_no_zeros.iloc[
+                :, :no_prev_pts
+            ]
+        distances = distances.replace([np.inf, -np.inf], np.nan)
+        drop_index = pd.isnull(distances).any(1)
+        distances = distances[drop_index == 0]
+
+        inliers = pd.DataFrame(index=distances.index)
+        for key in distances.keys():
+            current_distances = distances[key].dropna()
+            fit_params = ss.weibull_min.fit(current_distances)
+            quantiles = ss.weibull_min.cdf(current_distances, *fit_params)
+
+            df_inlier = pd.DataFrame(
+                {key: quantiles}, index=distances.index
+            )
+            inliers = pd.concat(
+                [inliers, df_inlier], axis=1
+            )
+
+        inlier_metric = pd.DataFrame(
+            data=inliers.sum(axis=1) / no_prev_pts,
+            columns=['inlier_metric'],
+            index=compute_df.index
+        )
+
+        inlier_metric = 2 * (inlier_metric - inlier_metric.min()) / \
+            (inlier_metric.max() - inlier_metric.min()) - 1
+
+        if set_ in ('train', 'test'):
+            inlier_metric = inlier_metric.iloc[no_prev_pts:]
+            compute_df = compute_df.iloc[no_prev_pts:]
+            self.remove_beginning_points_from_data_dict(set_, no_prev_pts)
+            self.data_dictionary[f'{set_}_features'] = pd.concat(
+                [compute_df, inlier_metric], axis=1)
+        else:
+            self.data_dictionary['prediction_features'] = pd.concat(
+                [compute_df, inlier_metric], axis=1)
+            self.data_dictionary['prediction_features'].fillna(0, inplace=True)
+
+        return None
+
+    def remove_beginning_points_from_data_dict(self, set_='train', no_prev_pts: int = 10):
+        features = self.data_dictionary[f'{set_}_features']
+        weights = self.data_dictionary[f'{set_}_weights']
+        labels = self.data_dictionary[f'{set_}_labels']
+        self.data_dictionary[f'{set_}_weights'] = weights[no_prev_pts:]
+        self.data_dictionary[f'{set_}_features'] = features.iloc[no_prev_pts:]
+        self.data_dictionary[f'{set_}_labels'] = labels.iloc[no_prev_pts:]
+
+    def add_noise_to_training_features(self) -> None:
+        """
+        Add noise to train features to reduce the risk of overfitting.
+        """
+        mu = 0  # no shift
+        sigma = self.freqai_config["feature_parameters"]["noise_standard_deviation"]
+        compute_df = self.data_dictionary['train_features']
+        noise = np.random.normal(mu, sigma, [compute_df.shape[0], compute_df.shape[1]])
+        self.data_dictionary['train_features'] += noise
         return
 
     def find_features(self, dataframe: DataFrame) -> None:
@@ -725,7 +870,7 @@ class FreqaiDataKitchen:
         if (len(do_predict) - do_predict.sum()) > 0:
             logger.info(
                 f"DI tossed {len(do_predict) - do_predict.sum()} predictions for "
-                "being too far from training data"
+                "being too far from training data."
             )
 
         self.do_predict += do_predict
