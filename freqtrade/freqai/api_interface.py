@@ -13,8 +13,7 @@ from freqtrade.exceptions import OperationalException
 from freqtrade.freqai.data_drawer import FreqaiDataDrawer
 import numpy as np
 from typing import Callable
-import datetime
-from datetime import timedelta
+from datetime import timedelta, timezone, datetime
 import dateutil.parser
 import time
 import san
@@ -22,6 +21,7 @@ from san.graphql import execute_gql
 from freqtrade.configuration import TimeRange
 from san import Batch
 from freqtrade.exchange import timeframe_to_seconds
+from freqtrade.freqai.data_kitchen import FreqaiDataKitchen
 
 logger = logging.getLogger(__name__)
 
@@ -59,7 +59,9 @@ class FreqaiAPI:
             }
         self.api_dict: Dict[str, Any] = {}
         self.num_posts = 0
-        self.santiment_api_key = self.freqai_config['feature_parameters'].get('santiment_api_key')
+        self.santiment_api_key = self.freqai_config.get(
+            'santiment_config', {}).get('santiment_api_key')
+        self.metric_slug_temporary = []
 
     def start_fetching_from_api(self, dataframe: DataFrame, pair: str) -> DataFrame:
 
@@ -224,52 +226,70 @@ class FreqaiAPI:
             return_str = expected_str['name']
             self.api_dict[pair][return_str] = 0
 
-    # Santiment
+    ###### SANTIMENT API INTERFACE ########
+    # def graphql_timeseries(self, metric, slug, start, stop, interval):
+    #     execute_str = ('{'
+    #                    f'getMetric(metric: "{metric}"){{'
+    #                    f'timeseriesData(slug: "{slug}"'
+    #                    f'from: "{start}"'
+    #                    f'to: "{stop}"'
+    #                    f'interval: "{interval}"){{'
+    #                    r'datetime '
+    #                    r'value}'
+    #                    r'}}')
+
+    #     res = execute_gql(execute_str)
 
     def create_metric_update_tracker(self) -> list:
 
-        metrics_to_get = [ "daily_active_addresses", "transaction_volume",
-                          "active_withdrawals_5m"]  # "daily_active_addresses", 'active_addresses_1h', "transaction_volume", "active_withdrawals_5m"]
-        slugs = ['santiment'] # ['bitcoin', 'ethereum']
+        metrics_to_get = self.freqai_config['santiment_config']['metrics']
+        # ["daily_active_addresses", "transaction_volume",
+        #                   "active_withdrawals_5m", 'active_addresses_1h']
+        slugs = self.freqai_config['santiment_config']['slugs']  # ['bitcoin', 'ethereum']
         metric_slug = []
 
         for metric in metrics_to_get:
             for slug in slugs:
                 metric_slug.append(f'{metric}/{slug}')
                 self.dd.metric_update_tracker[f'{metric}/{slug}'] = {
-                    'timestamp': 0, 'minInterval': self.config['timeframe']}
+                    'datetime': datetime.now(tz=timezone.utc), 'minInterval': self.config['timeframe']}
         self.metric_slug_final = metric_slug.copy()
 
         return metric_slug
 
     def get_and_store_last_updated_timestamp(self, metric, slug):
 
-        execute_str = ('{'
-                       f'getMetric(metric: "{metric}"){{'
-                       f'lastDatetimeComputedAt(slug: "{slug}")'
-                       r'}}')
-        res = execute_gql(execute_str)
-        time_updated = res['getMetric']['lastDatetimeComputedAt']
-        self.dd.metric_update_tracker[f'{metric}/{slug}']['timestamp'] = int(dateutil.parser.parse(
-            time_updated).timestamp())
+        # execute_str = ('{'
+        #                f'getMetric(metric: "{metric}"){{'
+        #                f'lastDatetimeComputedAt(slug: "{slug}")'
+        #                r'}}')
+        # res = execute_gql(execute_str)
+        time_updated = datetime.now(tz=timezone.utc)  # res['getMetric']['lastDatetimeComputedAt']
+        self.dd.metric_update_tracker[f'{metric}/{slug}']['datetime_updated'] = time_updated
 
     def check_if_needs_update(self, metric, slug):
 
-        updated_ts = self.dd.metric_update_tracker[f'{metric}/{slug}']['timestamp']
+        try:
+            updated_dt = self.dd.metric_update_tracker[f'{metric}/{slug}']['datetime_updated']
+        except TypeError:
+            logger.info('someshit happening')
         interval = self.dd.metric_update_tracker[f'{metric}/{slug}']['minInterval']
-        to_update_ts = int(updated_ts + timeframe_to_seconds(interval))
-        now_timestamp = int(datetime.datetime.now().timestamp())
+        to_update_dt = updated_dt + timedelta(seconds=timeframe_to_seconds(interval))
+        now_dt = datetime.now(timezone.utc)
 
-        if now_timestamp < to_update_ts:
-            until_update = (to_update_ts - now_timestamp) / 3600
-            logger.info(f'Not pulling new data yet for {metric}/{slug}, still {until_update:.2f} hours.')
+        if now_dt < to_update_dt:
+            until_update = (to_update_dt - now_dt)  # / 3600
+            logger.info(
+                f'Not pulling new data yet for {metric}/{slug}, still {until_update}')
             return None
         else:
-            logger.info(f'Pulling new value for {metric}/{slug}')
-            self.dd.metric_update_tracker[f'{metric}/{slug}'] = to_update_ts
-            return datetime.datetime.utcfromtimestamp(updated_ts)
+            logger.info(f'Trying to pulling new value for {metric}/{slug}')
+            # self.dd.metric_update_tracker[f'{metric}/{slug}']['datetime'] = to_update_dt
+            self.metric_slug_temporary.append(f'{metric}/{slug}')
+            return updated_dt
 
-    def prepare_historic_dataframe(self, metric, slug, start, stop) -> bool:
+    def prepare_historic_dataframe(self, metric: str, slug: str,
+                                   start: datetime, stop: datetime) -> bool:
         projects = san.get("projects/all")
         skip = False
         if not projects['slug'].str.contains(slug).any():
@@ -294,13 +314,19 @@ class FreqaiAPI:
             return True
 
         if meta_dict['isRestricted']:
-            restricted_from = dateutil.parser.parse(meta_dict['restrictedFrom'])  # .timestamp()
-            restricted_to = dateutil.parser.parse(meta_dict['restrictedTo'])  # .timestamp()
-            if restricted_from.timestamp() > start.timestamp():
+            if meta_dict['restrictedFrom']:
+                restricted_from = dateutil.parser.parse(meta_dict['restrictedFrom'])
+            else:
+                restricted_from = None
+            if meta_dict['restrictedTo']:
+                restricted_to = dateutil.parser.parse(meta_dict['restrictedTo'])
+            else:
+                restricted_to = None
+            if restricted_from and restricted_from > start:
                 logger.warning(f'Not enough data at start for {metric}/{slug}')
                 self.metric_slug_final.remove(f'{metric}/{slug}')
                 return True
-            if restricted_to.timestamp() < stop.timestamp():
+            if restricted_to and restricted_to < stop:
                 logger.warning(f'Not enough data at end for {metric}/{slug}')
                 self.metric_slug_final.remove(f'{metric}/{slug}')
                 return True
@@ -309,19 +335,19 @@ class FreqaiAPI:
 
         return skip
 
-    def download_external_data_from_santiment(self, timerange: TimeRange = TimeRange()) -> None:
+    def download_external_data_from_santiment(self, dk: FreqaiDataKitchen, timerange: TimeRange = TimeRange()) -> None:
 
-        key = next(iter(self.dd.historic_data))
         build_historic_df = False
         if self.dd.historic_external_data.empty:
             build_historic_df = True
-            self.dd.historic_external_data['datetime'] = self.dd.historic_data[key][self.config['timeframe']]['date']
+            self.dd.historic_external_data['datetime'] = self.dd.historic_data[dk.pair][self.config['timeframe']]['date']
             metric_slug = self.create_metric_update_tracker()
-            start = datetime.datetime.utcfromtimestamp(timerange.startts)
-            stop = datetime.datetime.utcfromtimestamp(timerange.stopts)
+            start = datetime.fromtimestamp(timerange.startts, tz=timezone.utc)
+            stop = datetime.fromtimestamp(timerange.stopts, tz=timezone.utc)
         else:
             metric_slug = self.metric_slug_final
-            stop = datetime.datetime.now()
+            self.metric_slug_temporary = []
+            stop = datetime.now(timezone.utc)
 
         san.ApiConfig.api_key = self.santiment_api_key
 
@@ -346,39 +372,95 @@ class FreqaiAPI:
                 f'{metric}/{slug}',
                 from_date=start,
                 to_date=stop,
-                interval=self.config['timeframe'],
+                interval=self.dd.metric_update_tracker[f'{metric}/{slug}']['minInterval']
             )
 
         if batch.queries:
             response = batch.execute()
-            metric_dict = dict(zip(self.metric_slug_final, response))
         else:
             logger.info('Nothing to fetch externally, ffilling dataframe')
             self.ffill_historic_values()
             return
 
         if build_historic_df:
-            for metric in self.metric_slug_final:
-                metric_dict[metric].rename(columns={'value': metric}, inplace=True)
-                self.dd.historic_external_data = pd.merge(
-                    self.dd.historic_external_data, metric_dict[metric],
-                    how='outer', on='datetime'
-                    ).ffill()
+            self.build_historic_external_data(response, dk)
         else:
-            for metric in self.metric_slug_final:
-                metric_dict[metric].rename(columns={'value': metric}, inplace=True)
-            pd.concat([metric_dict[key] for key in metric_dict], axis=0)
-            df = pd.DataFrame.from_dict(metric_dict)
-            self.dd.historic_external_data = pd.concat(
-                [self.dd.historic_external_data, df], axis=0, ignore_index=True)
-            self.dd.historic_external_data.fillna(method='ffill', inplace=True)
+            self.append_new_row_to_historic_external_data(response, dk)
+
+    def build_historic_external_data(self, response: dict, dk: FreqaiDataKitchen):
+        """
+        Build the persistent historic_external_data dataframe using user defined
+        training duration.
+        """
+        logger.info(f'External successfully fetching metrics for {self.metric_slug_final}')
+        metric_dict = dict(zip(self.metric_slug_final, response))
+        for metric in self.metric_slug_final:
+            metric_dict[metric].rename(columns={'value': metric}, inplace=True)
+            dt = datetime.fromtimestamp(
+                int(metric_dict[metric].iloc[-1].name.timestamp()), timezone.utc)
+            self.dd.metric_update_tracker[f'{metric}']['datetime_updated'] = dt
+            self.dd.historic_external_data = pd.merge(
+                self.dd.historic_external_data, metric_dict[metric],
+                how='left', on='datetime'
+                ).ffill()
+        # if len(self.dd.historic_external_data) != len(self.dd.historic_data[dk.pair][self.config['timeframe']]):
+        #     logger.info('size problem')
+
+    def append_new_row_to_historic_external_data(self, response, dk):
+        """
+        Append new row to the historic_external_data dataframe. This
+        function checks the response from santiment if there was new data
+        or not, and ffills values accordingly.
+
+        Note: santiment data is stored at the back of the bucket, not the front.
+        TODO consider storing all their values 1 "minInterval" forward (front
+        of the bucket). But it should be ensured that this minInterval is properly
+        handled across all metrics.
+        """
+        metric_dict = dict(zip(self.metric_slug_temporary, response))
+        hist_df = self.dd.historic_external_data
+        metric_df = pd.DataFrame(np.nan, index=hist_df.index[-1:], columns=hist_df.columns)
+        hist_df = pd.concat([hist_df, metric_df], ignore_index=True, axis=0)
+
+        for metric in self.metric_slug_temporary:
+
+            if metric_dict[metric].empty:
+                logger.info(f'Unable to pull new data for {metric}, ffilling')
+                continue
+            dt = datetime.fromtimestamp(
+                int(metric_dict[metric].iloc[-1].name.timestamp()), timezone.utc)
+
+            if dt == self.dd.metric_update_tracker[f'{metric}']['datetime_updated']:
+                logger.info(
+                    f'no new data available for {metric} from santiment, waiting since {dt}')
+                continue
+
+            metric_dict[metric].rename(columns={'value': metric}, inplace=True)
+            # hist_df[metric].iloc[-1] = metric_dict[metric].iloc[-1]
+
+            self.dd.metric_update_tracker[f'{metric}']['datetime_updated'] = dt
+            self.dd.metric_update_tracker[f'{metric}']['datetime_grabbed'] = datetime.now(
+                tz=timezone.utc)
+
+            idx = hist_df[hist_df['datetime'] >= dt].index
+            hist_df[metric].iloc[idx] = metric_dict[metric].iloc[-1]
+            logger.info(f'Successfully pulled new data for {metric}')
+        hist_df['datetime'].iloc[-1] = hist_df['datetime'].iloc[-2] + timedelta(
+            seconds=timeframe_to_seconds(self.config['timeframe']))
+        hist_df.fillna(method='ffill', inplace=True)
+        self.dd.historic_external_data = hist_df
+        # if len(self.dd.historic_external_data) != len(self.dd.historic_data[dk.pair][self.config['timeframe']]):
+        #     logger.info('size problem')
 
     def ffill_historic_values(self):
-
+        """
+        Only used if no queries were actually made to santiment.
+        """
         index = self.dd.historic_external_data.index[-1:]
         columns = self.dd.historic_external_data.columns
         df = self.dd.historic_external_data
-        new_date = df['datetime'].iloc[-1] + timedelta(seconds=timeframe_to_seconds(self.config['timeframe']))
+        new_date = df['datetime'].iloc[-1] + \
+            timedelta(seconds=timeframe_to_seconds(self.config['timeframe']))
         last_row = pd.DataFrame(np.nan, index=index, columns=columns)
         self.dd.historic_external_data = pd.concat(
             [self.dd.historic_external_data, last_row], ignore_index=True, axis=0)

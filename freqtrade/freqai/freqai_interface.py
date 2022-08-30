@@ -21,7 +21,7 @@ from freqtrade.exchange import timeframe_to_seconds
 from freqtrade.freqai.data_drawer import FreqaiDataDrawer
 from freqtrade.freqai.data_kitchen import FreqaiDataKitchen
 from freqtrade.strategy.interface import IStrategy
-
+import copy
 
 pd.options.mode.chained_assignment = None
 logger = logging.getLogger(__name__)
@@ -86,12 +86,14 @@ class IFreqaiModel(ABC):
         self.last_trade_database_summary: DataFrame = {}
         self.current_trade_database_summary: DataFrame = {}
         self.analysis_lock = Lock()
+        self.data_update_lock = Lock()
         self.inference_time: float = 0
         self.train_time: float = 0
         self.begin_time: float = 0
         self.begin_time_train: float = 0
         self.base_tf_seconds = timeframe_to_seconds(self.config['timeframe'])
-        self.add_santiment_data = self.freqai_info['feature_parameters'].get('inlclude_santiment_data', False)
+        self.add_santiment_data = self.freqai_info['feature_parameters'].get(
+            'include_santiment_data', False)
 
         if self.freqai_info.get('freqai_api_url', None):
             self.api_mode = self.freqai_info.get('freqai_api_mode', 'getter')
@@ -287,10 +289,11 @@ class IFreqaiModel(ABC):
 
         # append the historic data once per round
         if self.dd.historic_data:
-            self.dd.update_historic_data(strategy, dk)
-            self.update_external_data()
+            with self.data_update_lock:
+                self.dd.update_historic_data(strategy, dk)
+                self.update_external_data(dk)
 
-            logger.debug(f'Updating historic data on pair {metadata["pair"]}')
+                logger.debug(f'Updating historic data on pair {metadata["pair"]}')
 
         if not self.follow_mode:
 
@@ -309,7 +312,7 @@ class IFreqaiModel(ABC):
                 dk.download_all_data_for_training(data_load_timerange, strategy.dp)
                 self.dd.load_all_pair_histories(data_load_timerange, dk)
                 if self.add_santiment_data:
-                    self.api.download_external_data_from_santiment(data_load_timerange)
+                    self.api.download_external_data_from_santiment(dk, data_load_timerange)
 
             if not self.scanning:
                 self.scanning = True
@@ -329,6 +332,8 @@ class IFreqaiModel(ABC):
             dataframe = self.dk.use_strategy_to_populate_indicators(
                 strategy, prediction_dataframe=dataframe, pair=metadata["pair"]
             )
+            if self.add_santiment_data and not self.dd.historic_external_data.empty:
+                dataframe = self.attach_santiment_data_to_prediction_features(dataframe)
 
         if not self.model:
             logger.warning(
@@ -516,25 +521,21 @@ class IFreqaiModel(ABC):
                                     new_trained_timerange does not contain any NaNs)
         """
 
-        corr_dataframes, base_dataframes = self.dd.get_base_and_corr_dataframes(
-            data_load_timerange, pair, dk
-        )
-
-        with self.analysis_lock:
-            unfiltered_dataframe = dk.use_strategy_to_populate_indicators(
-                strategy, corr_dataframes, base_dataframes, pair
+        with self.data_update_lock:
+            corr_dataframes, base_dataframes = self.dd.get_base_and_corr_dataframes(
+                data_load_timerange, pair, dk
             )
 
-        unfiltered_dataframe = dk.slice_dataframe(new_trained_timerange, unfiltered_dataframe)
+            with self.analysis_lock:
+                unfiltered_dataframe = dk.use_strategy_to_populate_indicators(
+                    strategy, corr_dataframes, base_dataframes, pair
+                )
 
-        if self.freqai_info['feature_parameters'].get('include_santiment_data', False):
-            san_data = self.dd.historic_external_data
-            san_data.rename(columns={'datetime': 'date'}, inplace=True)
-            san_data = dk.slice_dataframe(new_trained_timerange, san_data)
-            san_data = san_data.loc[:, san_data.columns != 'date']
-            san_data.columns = [f'%-{c}' for c in san_data]
-            san_data.set_index(unfiltered_dataframe.index, inplace=True)
-            unfiltered_dataframe = pd.concat([unfiltered_dataframe, san_data], axis=1)
+            unfiltered_dataframe = dk.slice_dataframe(new_trained_timerange, unfiltered_dataframe)
+
+            if self.add_santiment_data:
+                unfiltered_dataframe = self.add_santiment_data_to_training_features(
+                    new_trained_timerange, unfiltered_dataframe, dk)
 
         # find the features indicated by strategy and store in datakitchen
         dk.find_features(unfiltered_dataframe)
@@ -730,9 +731,54 @@ class IFreqaiModel(ABC):
             logger.error('Strategy trying to post predictions to DB, but not set to '
                          'poster. Set freqai_api_mode to poster in config')
 
-    def update_external_data(self, dk):
-        # check and update external data once per candle.
+    def update_external_data(self, dk: FreqaiDataKitchen):
+        """
+        Check santiment API and update external data dataframe.
+        """
         size_hist = len(self.dd.historic_data[dk.pair][self.config['timeframe']])
         size_hist_ext = len(self.dd.historic_external_data)
+        if size_hist < size_hist_ext and self.add_santiment_data:
+            logger.warning('exchange data smaller than external data?!')
+
         if size_hist > size_hist_ext and self.add_santiment_data:
-            self.api.download_external_data_from_santiment()
+            self.api.download_external_data_from_santiment(dk)
+
+            if len(self.dd.historic_external_data) != size_hist:
+                logger.info('historic_external_data size mismatch')
+
+    def attach_santiment_data_to_prediction_features(self, df: DataFrame):
+        """
+        Attaches the most receent santiment data to prediction features
+        before inferencing the model.
+        """
+        san_data = copy.deepcopy(self.dd.historic_external_data)
+        san_data.rename(columns={'datetime': 'date'}, inplace=True)
+        san_data = san_data.tail(len(df))
+        san_data = san_data.loc[:, san_data.columns != 'date']
+        san_data.columns = [f'%-{c}' for c in san_data]
+        san_data.set_index(df.index, inplace=True)
+        df = pd.concat([df, san_data], axis=1)
+
+        return df
+
+    def add_santiment_data_to_training_features(self, new_trained_timerange: TimeRange,
+                                                unfiltered_dataframe: DataFrame,
+                                                dk: FreqaiDataKitchen):
+        """
+        Attaches santiment data to the unfiltered training feature dataframe
+        before filtering/cleaning/trainnig.
+        """
+
+        san_data = copy.deepcopy(self.dd.historic_external_data)
+        san_data.rename(columns={'datetime': 'date'}, inplace=True)
+        san_data = dk.slice_dataframe(new_trained_timerange, san_data)
+        last_date = unfiltered_dataframe['date'].iloc[-1]
+        # this line is needed because santiment data may be updated before
+        # the coin in question
+        san_data = san_data.loc[san_data["date"] <= last_date, :]
+        san_data = san_data.loc[:, san_data.columns != 'date']
+        san_data.columns = [f'%-{c}' for c in san_data]
+        san_data.set_index(unfiltered_dataframe.index, inplace=True)
+        unfiltered_dataframe = pd.concat([unfiltered_dataframe, san_data], axis=1)
+
+        return unfiltered_dataframe
