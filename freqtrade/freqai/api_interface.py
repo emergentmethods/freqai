@@ -436,7 +436,6 @@ class FreqaiAPI:
                 continue
 
             metric_dict[metric].rename(columns={'value': metric}, inplace=True)
-            # hist_df[metric].iloc[-1] = metric_dict[metric].iloc[-1]
 
             self.dd.metric_update_tracker[f'{metric}']['datetime_updated'] = dt
             self.dd.metric_update_tracker[f'{metric}']['datetime_grabbed'] = datetime.now(
