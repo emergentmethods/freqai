@@ -798,7 +798,7 @@ class IFreqaiModel(ABC):
         before filtering/cleaning/trainnig.
         """
 
-        first_date, last_date = self.dk.get_first_and_last_dates(unfiltered_dataframe)
+        first_date, last_date = dk.get_first_and_last_dates(unfiltered_dataframe)
 
         san_data = copy.deepcopy(self.dd.historic_external_data)
         san_data.rename(columns={'datetime': 'date'}, inplace=True)
@@ -816,10 +816,12 @@ class IFreqaiModel(ABC):
                 'training on fewer data points than desired')
 
         # match both dataframes
-        unfiltered_dataframe = unfiltered_dataframe.loc[latest_first <=
-                                                        unfiltered_dataframe["date"] <=
+        unfiltered_dataframe = unfiltered_dataframe.loc[unfiltered_dataframe["date"] <=
                                                         earliest_last, :]
-        san_data = san_data.loc[latest_first <= san_data["date"] <= earliest_last, :]
+        unfiltered_dataframe = unfiltered_dataframe.loc[unfiltered_dataframe["date"] >=
+                                                        latest_first, :]
+        san_data = san_data.loc[san_data["date"] <= earliest_last, :]
+        san_data = san_data.loc[san_data["date"] >= latest_first, :]
 
         if len(unfiltered_dataframe) != len(san_data):
             raise OperationalException(

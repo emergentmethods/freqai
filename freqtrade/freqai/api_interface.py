@@ -59,6 +59,8 @@ class FreqaiAPI:
         self.santiment_api_key = self.freqai_config.get(
             'santiment_config', {}).get('santiment_api_key')
         self.metric_slug_temporary: list = []
+        self.moving_avg_window = self.freqai_config.get(
+            'santiment_config', {}).get('moving_average_window', 5)
 
     def start_fetching_from_api(self, dataframe: DataFrame, pair: str) -> DataFrame:
 
@@ -339,7 +341,7 @@ class FreqaiAPI:
         build_historic_df = False
         if self.dd.historic_external_data.empty:
             build_historic_df = True
-            pair = dk.find_pair_with_most_data(self.dd)
+            pair = self.find_pair_with_most_data()
             hist_df = self.dd.historic_data[pair][self.config['timeframe']]
             self.dd.historic_external_data['datetime'] = hist_df['date']
             metric_slug = self.create_metric_update_tracker()
@@ -373,6 +375,7 @@ class FreqaiAPI:
                 f'{metric}/{slug}',
                 from_date=start,
                 to_date=stop,
+                transform={"type": "moving_average", "moving_average_base": self.moving_avg_window},
                 interval=self.dd.metric_update_tracker[f'{metric}/{slug}']['minInterval']
             )
 
@@ -463,3 +466,14 @@ class FreqaiAPI:
         self.dd.historic_external_data.iloc[-1] = df.iloc[-1]
         self.dd.historic_external_data['datetime'].iloc[-1] = new_date
         return
+
+    def find_pair_with_most_data(self):
+        length = 0
+        max_pair = ''
+        for pair in self.dd.historic_data:
+            pair_len = len(self.dd.historic_data[pair][self.config["timeframe"]])
+            if pair_len > length:
+                max_pair = pair
+                length = pair_len
+
+        return max_pair
