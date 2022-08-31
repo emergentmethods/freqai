@@ -338,6 +338,7 @@ class FreqaiAPI:
     def download_external_data_from_santiment(self, dk: FreqaiDataKitchen,
                                               timerange: TimeRange = TimeRange()) -> None:
 
+        begin = time.time()
         build_historic_df = False
         if self.dd.historic_external_data.empty:
             build_historic_df = True
@@ -375,7 +376,8 @@ class FreqaiAPI:
                 f'{metric}/{slug}',
                 from_date=start,
                 to_date=stop,
-                transform={"type": "moving_average", "moving_average_base": self.moving_avg_window},
+                # transform={"type": "moving_average",
+                #            "moving_average_base": self.moving_avg_window},
                 interval=self.dd.metric_update_tracker[f'{metric}/{slug}']['minInterval']
             )
 
@@ -391,6 +393,9 @@ class FreqaiAPI:
         else:
             self.append_new_row_to_historic_external_data(response, dk)
 
+        end = time.time()
+        logger.info(f'Total time spent fetching Santiment data {end-begin:.2f} seconds')
+
     def build_historic_external_data(self, response: dict, dk: FreqaiDataKitchen):
         """
         Build the persistent historic_external_data dataframe using user defined
@@ -398,8 +403,14 @@ class FreqaiAPI:
         """
         logger.info(f'External successfully fetching metrics for {self.metric_slug_final}')
         metric_dict = dict(zip(self.metric_slug_final, response))
+        to_remove = []
         for metric in self.metric_slug_final:
             metric_dict[metric].rename(columns={'value': metric}, inplace=True)
+            if (metric_dict[metric][metric] == 0.0).all():
+                logger.info(f'{metric} is all zeros, removing it from metric '
+                            'list and never fetching again.')
+                to_remove.append(metric)
+                continue
             dt = datetime.fromtimestamp(
                 int(metric_dict[metric].iloc[-1].name.timestamp()), timezone.utc)
             self.dd.metric_update_tracker[f'{metric}']['datetime_updated'] = dt
@@ -407,6 +418,8 @@ class FreqaiAPI:
                 self.dd.historic_external_data, metric_dict[metric],
                 how='left', on='datetime'
                 ).ffill()
+        for item in to_remove:
+            self.metric_slug_final.remove(item)
 
     def append_new_row_to_historic_external_data(self, response, dk):
         """
