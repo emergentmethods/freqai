@@ -1,4 +1,5 @@
 # import contextlib
+import copy
 import datetime
 import logging
 import shutil
@@ -8,20 +9,22 @@ from abc import ABC, abstractmethod
 from pathlib import Path
 from threading import Lock
 from typing import Any, Dict, Tuple
+
 import numpy as np
 import pandas as pd
 from numpy.typing import NDArray
 from pandas import DataFrame
+
 # from timer import timer
 from freqtrade.configuration import TimeRange
 from freqtrade.enums import RunMode
 from freqtrade.exceptions import OperationalException
-from freqtrade.freqai.api_interface import FreqaiAPI
 from freqtrade.exchange import timeframe_to_seconds
+from freqtrade.freqai.api_interface import FreqaiAPI
 from freqtrade.freqai.data_drawer import FreqaiDataDrawer
 from freqtrade.freqai.data_kitchen import FreqaiDataKitchen
 from freqtrade.strategy.interface import IStrategy
-import copy
+
 
 pd.options.mode.chained_assignment = None
 logger = logging.getLogger(__name__)
@@ -295,7 +298,7 @@ class IFreqaiModel(ABC):
                 self.dd.update_historic_data(strategy, dk)
                 self.update_external_data(dk)
 
-                logger.debug(f'Updating historic data on pair {metadata["pair"]}')
+                logger.debug(f'Updated historic data on pair {metadata["pair"]}')
 
         if not self.follow_mode:
 
@@ -748,13 +751,29 @@ class IFreqaiModel(ABC):
         size_hist = len(self.dd.historic_data[dk.pair][self.config['timeframe']])
         size_hist_ext = len(self.dd.historic_external_data)
         if size_hist < size_hist_ext and self.add_santiment_data:
-            logger.warning('exchange data smaller than external data?!')
+            logger.warning(
+                f'exchange data smaller than external data. '
+                f'external data = {size_hist_ext}, exchange data = {size_hist}')
+            return
+
+        if size_hist == size_hist_ext:
+            logger.info('Exchange data size equal to external data.')
+            return
 
         if size_hist > size_hist_ext and self.add_santiment_data:
+            logger.info(
+                f'Exchange data bigger than external data. '
+                f'external data = {size_hist_ext}, exchange data = {size_hist}')
+            if size_hist - size_hist_ext > 2:
+                logger.warning(
+                    'Exchange data >2 rows more than external, '
+                    'this should only occur during the beginning.')
             self.api.download_external_data_from_santiment(dk)
 
             if len(self.dd.historic_external_data) != size_hist:
-                logger.info('historic_external_data size mismatch')
+                logger.info(
+                    f'historic_external_data size mismatch. '
+                    f'external data = {size_hist_ext}, exchange data = {size_hist}')
 
     def attach_santiment_data_to_prediction_features(self, df: DataFrame):
         """
@@ -779,16 +798,39 @@ class IFreqaiModel(ABC):
         before filtering/cleaning/trainnig.
         """
 
+        first_date, last_date = self.dk.get_first_and_last_dates(unfiltered_dataframe)
+
         san_data = copy.deepcopy(self.dd.historic_external_data)
         san_data.rename(columns={'datetime': 'date'}, inplace=True)
         san_data = dk.slice_dataframe(new_trained_timerange, san_data)
-        last_date = unfiltered_dataframe['date'].iloc[-1]
-        # this line is needed because santiment data may be updated before
-        # the coin in question
-        san_data = san_data.loc[san_data["date"] <= last_date, :]
+        first_date, last_date = dk.get_first_and_last_dates(unfiltered_dataframe)
+        first_date_ext, last_date_ext = dk.get_first_and_last_dates(san_data)
+
+        # ensure all dateranges are equivalent in length
+        latest_first = first_date if first_date > first_date_ext else first_date_ext
+        earliest_last = last_date if last_date < last_date_ext else last_date_ext
+
+        if last_date_ext < last_date:
+            logger.warning(
+                'External data not updated as much as exchange data, '
+                'training on fewer data points than desired')
+
+        # match both dataframes
+        unfiltered_dataframe = unfiltered_dataframe.loc[latest_first <=
+                                                        unfiltered_dataframe["date"] <=
+                                                        earliest_last, :]
+        san_data = san_data.loc[latest_first <= san_data["date"] <= earliest_last, :]
+
+        if len(unfiltered_dataframe) != len(san_data):
+            raise OperationalException(
+                'Exchange and external dataframes containing unequal data counts')
+
+        # remove date from san_data
         san_data = san_data.loc[:, san_data.columns != 'date']
         san_data.columns = [f'%-{c}' for c in san_data]
         san_data.set_index(unfiltered_dataframe.index, inplace=True)
+
+        # add external data to the training features
         unfiltered_dataframe = pd.concat([unfiltered_dataframe, san_data], axis=1)
 
         return unfiltered_dataframe

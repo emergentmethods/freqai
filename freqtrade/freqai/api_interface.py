@@ -1,27 +1,24 @@
 import logging
 import time
-from typing import Any, Callable, Dict, Tuple
+from datetime import datetime, timedelta, timezone
+from typing import Any, Callable, Dict
 
 # import datetime
 import dateutil.parser
 import numpy as np
 import pandas as pd
 import requests
-from pandas import DataFrame
-from freqtrade.exceptions import OperationalException
-
-from freqtrade.freqai.data_drawer import FreqaiDataDrawer
-import numpy as np
-from typing import Callable
-from datetime import timedelta, timezone, datetime
-import dateutil.parser
-import time
 import san
-from san.graphql import execute_gql
-from freqtrade.configuration import TimeRange
+from pandas import DataFrame
 from san import Batch
+from san.graphql import execute_gql
+
+from freqtrade.configuration import TimeRange
+from freqtrade.exceptions import OperationalException
 from freqtrade.exchange import timeframe_to_seconds
+from freqtrade.freqai.data_drawer import FreqaiDataDrawer
 from freqtrade.freqai.data_kitchen import FreqaiDataKitchen
+
 
 logger = logging.getLogger(__name__)
 
@@ -61,7 +58,7 @@ class FreqaiAPI:
         self.num_posts = 0
         self.santiment_api_key = self.freqai_config.get(
             'santiment_config', {}).get('santiment_api_key')
-        self.metric_slug_temporary = []
+        self.metric_slug_temporary: list = []
 
     def start_fetching_from_api(self, dataframe: DataFrame, pair: str) -> DataFrame:
 
@@ -216,7 +213,7 @@ class FreqaiAPI:
     def create_null_api_dict(self, pair: str) -> None:
         """
         Set values in api_dict to 0 and return to user. This is only used in case the API is
-        unresponsive, but  we still want FreqAI to return to the strategy to continue handling 
+        unresponsive, but  we still want FreqAI to return to the strategy to continue handling
         open trades.
         """
         subpair = pair.split('/')
@@ -226,19 +223,19 @@ class FreqaiAPI:
             return_str = expected_str['name']
             self.api_dict[pair][return_str] = 0
 
-    ###### SANTIMENT API INTERFACE ########
-    # def graphql_timeseries(self, metric, slug, start, stop, interval):
-    #     execute_str = ('{'
-    #                    f'getMetric(metric: "{metric}"){{'
-    #                    f'timeseriesData(slug: "{slug}"'
-    #                    f'from: "{start}"'
-    #                    f'to: "{stop}"'
-    #                    f'interval: "{interval}"){{'
-    #                    r'datetime '
-    #                    r'value}'
-    #                    r'}}')
+    # SANTIMENT API INTERFACE
+    def graphql_timeseries(self, metric, slug, start, stop, interval):
+        execute_str = ('{'
+                       f'getMetric(metric: "{metric}"){{'
+                       f'timeseriesData(slug: "{slug}"'
+                       f'from: "{start}"'
+                       f'to: "{stop}"'
+                       f'interval: "{interval}"){{'
+                       r'datetime '
+                       r'value}'
+                       r'}}')
 
-    #     res = execute_gql(execute_str)
+        return execute_gql(execute_str)
 
     def create_metric_update_tracker(self) -> list:
 
@@ -252,7 +249,8 @@ class FreqaiAPI:
             for slug in slugs:
                 metric_slug.append(f'{metric}/{slug}')
                 self.dd.metric_update_tracker[f'{metric}/{slug}'] = {
-                    'datetime': datetime.now(tz=timezone.utc), 'minInterval': self.config['timeframe']}
+                    'datetime': datetime.now(tz=timezone.utc),
+                    'minInterval': self.config['timeframe']}
         self.metric_slug_final = metric_slug.copy()
 
         return metric_slug
@@ -335,12 +333,15 @@ class FreqaiAPI:
 
         return skip
 
-    def download_external_data_from_santiment(self, dk: FreqaiDataKitchen, timerange: TimeRange = TimeRange()) -> None:
+    def download_external_data_from_santiment(self, dk: FreqaiDataKitchen,
+                                              timerange: TimeRange = TimeRange()) -> None:
 
         build_historic_df = False
         if self.dd.historic_external_data.empty:
             build_historic_df = True
-            self.dd.historic_external_data['datetime'] = self.dd.historic_data[dk.pair][self.config['timeframe']]['date']
+            pair = dk.find_pair_with_most_data(self.dd)
+            hist_df = self.dd.historic_data[pair][self.config['timeframe']]
+            self.dd.historic_external_data['datetime'] = hist_df['date']
             metric_slug = self.create_metric_update_tracker()
             start = datetime.fromtimestamp(timerange.startts, tz=timezone.utc)
             stop = datetime.fromtimestamp(timerange.stopts, tz=timezone.utc)
@@ -403,8 +404,6 @@ class FreqaiAPI:
                 self.dd.historic_external_data, metric_dict[metric],
                 how='left', on='datetime'
                 ).ffill()
-        # if len(self.dd.historic_external_data) != len(self.dd.historic_data[dk.pair][self.config['timeframe']]):
-        #     logger.info('size problem')
 
     def append_new_row_to_historic_external_data(self, response, dk):
         """
@@ -448,8 +447,6 @@ class FreqaiAPI:
             seconds=timeframe_to_seconds(self.config['timeframe']))
         hist_df.fillna(method='ffill', inplace=True)
         self.dd.historic_external_data = hist_df
-        # if len(self.dd.historic_external_data) != len(self.dd.historic_data[dk.pair][self.config['timeframe']]):
-        #     logger.info('size problem')
 
     def ffill_historic_values(self):
         """

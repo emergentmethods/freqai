@@ -20,6 +20,7 @@ from freqtrade.data.dataprovider import DataProvider
 from freqtrade.data.history.history_utils import refresh_backtest_ohlcv_data
 from freqtrade.exceptions import OperationalException
 from freqtrade.exchange import timeframe_to_seconds
+from freqtrade.freqai.data_drawer import FreqaiDataDrawer
 from freqtrade.strategy.interface import IStrategy
 
 
@@ -1194,3 +1195,23 @@ class FreqaiDataKitchen:
         if self.unique_classes:
             for label in self.unique_classes:
                 self.unique_class_list += list(self.unique_classes[label])
+
+    def get_first_and_last_dates(self,
+                                 dataframe: DataFrame) -> Tuple[datetime.datetime,
+                                                                datetime.datetime]:
+
+        first_date = dataframe['date'].iloc[0]
+        last_date = dataframe['date'].iloc[-1]
+
+        return first_date, last_date
+
+    def find_pair_with_most_data(self, dd: FreqaiDataDrawer):
+        length = 0
+        max_pair = ''
+        for pair in dd.historic_data:
+            pair_len = dd.historic_data[pair][self.config["timeframe"]]
+            if pair_len > length:
+                max_pair = pair
+                length = pair_len
+
+        return max_pair

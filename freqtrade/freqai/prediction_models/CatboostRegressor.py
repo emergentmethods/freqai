@@ -1,4 +1,3 @@
-import gc
 import logging
 from typing import Any, Dict
 
@@ -44,10 +43,5 @@ class CatboostRegressor(BaseRegressionModel):
         )
 
         model.fit(X=train_data, eval_set=test_data)
-
-        # some evidence that catboost pools have memory leaks:
-        # https://github.com/catboost/catboost/issues/1835
-        del train_data, test_data
-        gc.collect()
 
         return model
