@@ -45,7 +45,6 @@ class FreqaiExampleHybridStrategy(IStrategy):
             "weight_factor": 0.9,
             "principal_component_analysis": false,
             "use_SVM_to_remove_outliers": true,
-            "indicator_max_period_candles": 20,
             "indicator_periods_candles": [10, 20]
         },
         "data_split_parameters": {
@@ -96,20 +95,6 @@ class FreqaiExampleHybridStrategy(IStrategy):
     short_rsi = IntParameter(low=51, high=100, default=70, space='sell', optimize=True, load=True)
     exit_short_rsi = IntParameter(low=1, high=50, default=30, space='buy', optimize=True, load=True)
 
-    # FreqAI required function, leave as is or add additional informatives to existing structure.
-    def informative_pairs(self):
-        whitelist_pairs = self.dp.current_whitelist()
-        corr_pairs = self.config["freqai"]["feature_parameters"]["include_corr_pairlist"]
-        informative_pairs = []
-        for tf in self.config["freqai"]["feature_parameters"]["include_timeframes"]:
-            for pair in whitelist_pairs:
-                informative_pairs.append((pair, tf))
-            for pair in corr_pairs:
-                if pair in whitelist_pairs:
-                    continue  # avoid duplication
-                informative_pairs.append((pair, tf))
-        return informative_pairs
-
     # FreqAI required function, user can add or remove indicators, but general structure
     # must stay the same.
     def populate_any_indicators(
@@ -136,7 +121,7 @@ class FreqaiExampleHybridStrategy(IStrategy):
             t = int(t)
             informative[f"%-{coin}rsi-period_{t}"] = ta.RSI(informative, timeperiod=t)
             informative[f"%-{coin}mfi-period_{t}"] = ta.MFI(informative, timeperiod=t)
-            informative[f"%-{coin}adx-period_{t}"] = ta.ADX(informative, window=t)
+            informative[f"%-{coin}adx-period_{t}"] = ta.ADX(informative, timeperiod=t)
             informative[f"%-{coin}sma-period_{t}"] = ta.SMA(informative, timeperiod=t)
             informative[f"%-{coin}ema-period_{t}"] = ta.EMA(informative, timeperiod=t)
             informative[f"%-{coin}roc-period_{t}"] = ta.ROC(informative, timeperiod=t)

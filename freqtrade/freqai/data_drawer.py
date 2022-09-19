@@ -16,6 +16,7 @@ from numpy.typing import NDArray
 from pandas import DataFrame
 
 from freqtrade.configuration import TimeRange
+from freqtrade.constants import Config
 from freqtrade.data.history import load_pair_history
 from freqtrade.exceptions import OperationalException
 from freqtrade.freqai.data_kitchen import FreqaiDataKitchen
@@ -27,9 +28,7 @@ logger = logging.getLogger(__name__)
 
 class pair_info(TypedDict):
     model_filename: str
-    first: bool
     trained_timestamp: int
-    priority: int
     data_path: str
     extras: dict
 
@@ -58,7 +57,7 @@ class FreqaiDataDrawer:
     Juha Nykänen @suikula, Wagner Costa @wagnercosta, Johan Vlugt @Jooopieeert
     """
 
-    def __init__(self, full_path: Path, config: dict, follow_mode: bool = False):
+    def __init__(self, full_path: Path, config: Config, follow_mode: bool = False):
 
         self.config = config
         self.freqai_info = config.get("freqai", {})
@@ -76,6 +75,8 @@ class FreqaiDataDrawer:
             self.full_path / f"follower_dictionary-{self.follower_name}.json"
         )
         self.historic_predictions_path = Path(self.full_path / "historic_predictions.pkl")
+        self.historic_predictions_bkp_path = Path(
+            self.full_path / "historic_predictions.backup.pkl")
         self.pair_dictionary_path = Path(self.full_path / "pair_dictionary.json")
         self.follow_mode = follow_mode
         if follow_mode:
@@ -89,7 +90,7 @@ class FreqaiDataDrawer:
         self.old_DBSCAN_eps: Dict[str, float] = {}
         self.empty_pair_dict: pair_info = {
                 "model_filename": "", "trained_timestamp": 0,
-                "priority": 1, "first": True, "data_path": "", "extras": {}}
+                "data_path": "", "extras": {}}
 
         self.historic_external_data: DataFrame = pd.DataFrame()
         self.metric_update_tracker: Dict[str, Dict[str, Any]] = {}
@@ -121,13 +122,21 @@ class FreqaiDataDrawer:
         """
         exists = self.historic_predictions_path.is_file()
         if exists:
-            with open(self.historic_predictions_path, "rb") as fp:
-                self.historic_predictions = cloudpickle.load(fp)
-            logger.info(
-                f"Found existing historic predictions at {self.full_path}, but beware "
-                "that statistics may be inaccurate if the bot has been offline for "
-                "an extended period of time."
-            )
+            try:
+                with open(self.historic_predictions_path, "rb") as fp:
+                    self.historic_predictions = cloudpickle.load(fp)
+                logger.info(
+                    f"Found existing historic predictions at {self.full_path}, but beware "
+                    "that statistics may be inaccurate if the bot has been offline for "
+                    "an extended period of time."
+                )
+            except EOFError:
+                logger.warning(
+                    'Historical prediction file was corrupted. Trying to load backup file.')
+                with open(self.historic_predictions_bkp_path, "rb") as fp:
+                    self.historic_predictions = cloudpickle.load(fp)
+                logger.warning('FreqAI successfully loaded the backup historical predictions file.')
+
         elif not self.follow_mode:
             logger.info("Could not find existing historic_predictions, starting from scratch")
         else:
@@ -144,6 +153,9 @@ class FreqaiDataDrawer:
         """
         with open(self.historic_predictions_path, "wb") as fp:
             cloudpickle.dump(self.historic_predictions, fp, protocol=cloudpickle.DEFAULT_PROTOCOL)
+
+        # create a backup
+        shutil.copy(self.historic_predictions_path, self.historic_predictions_bkp_path)
 
     def save_drawer_to_disk(self):
         """
@@ -206,7 +218,6 @@ class FreqaiDataDrawer:
             self.pair_dict[pair] = self.empty_pair_dict.copy()
             model_filename = ""
             trained_timestamp = 0
-            self.pair_dict[pair]["priority"] = len(self.pair_dict)
 
         if not data_path_set and self.follow_mode:
             logger.warning(
@@ -226,17 +237,8 @@ class FreqaiDataDrawer:
             return
         else:
             self.pair_dict[metadata["pair"]] = self.empty_pair_dict.copy()
-            self.pair_dict[metadata["pair"]]["priority"] = len(self.pair_dict)
 
             return
-
-    def pair_to_end_of_training_queue(self, pair: str) -> None:
-        # march all pairs up in the queue
-        with self.pair_dict_lock:
-            for p in self.pair_dict:
-                self.pair_dict[p]["priority"] -= 1
-            # send pair to end of queue
-            self.pair_dict[pair]["priority"] = len(self.pair_dict)
 
     def set_initial_return_values(self, pair: str, pred_df: DataFrame) -> None:
         """
@@ -345,7 +347,7 @@ class FreqaiDataDrawer:
         for dir in model_folders:
             result = pattern.match(str(dir.name))
             if result is None:
-                break
+                continue
             coin = result.group(1)
             timestamp = result.group(2)
 
