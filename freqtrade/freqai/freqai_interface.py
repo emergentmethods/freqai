@@ -768,7 +768,10 @@ class IFreqaiModel(ABC):
                 logger.warning(
                     'Exchange data >2 rows more than external, '
                     'this should only occur during the beginning.')
-            self.api.download_external_data_from_santiment(dk)
+            try:
+                self.api.download_external_data_from_santiment(dk)
+            except Exception as msg:
+                logger.warning(f'Something went wrong fetching external data with {msg}.')
 
             if len(self.dd.historic_external_data) != size_hist:
                 logger.info(
