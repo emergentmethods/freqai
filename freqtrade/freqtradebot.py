@@ -11,7 +11,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from schedule import Scheduler
 
-from freqtrade import __version__, constants
+from freqtrade import constants
 from freqtrade.configuration import validate_config_consistency
 from freqtrade.constants import BuySell, Config, LongShort
 from freqtrade.data.converter import order_book_to_dataframe
@@ -29,6 +29,7 @@ from freqtrade.plugins.pairlistmanager import PairListManager
 from freqtrade.plugins.protectionmanager import ProtectionManager
 from freqtrade.resolvers import ExchangeResolver, StrategyResolver
 from freqtrade.rpc import RPCManager
+from freqtrade.rpc.external_message_consumer import ExternalMessageConsumer
 from freqtrade.strategy.interface import IStrategy
 from freqtrade.strategy.strategy_wrapper import strategy_safe_wrapper
 from freqtrade.util import FtPrecise
@@ -52,8 +53,6 @@ class FreqtradeBot(LoggingMixin):
         """
         self.active_pair_whitelist: List[str] = []
 
-        logger.info('Starting freqtrade %s', __version__)
-
         # Init bot state
         self.state = State.STOPPED
 
@@ -74,6 +73,8 @@ class FreqtradeBot(LoggingMixin):
 
         PairLocks.timeframe = self.config['timeframe']
 
+        self.pairlists = PairListManager(self.exchange, self.config)
+
         # RPC runs in separate threads, can start handling external commands just after
         # initialization, even before Freqtradebot has a chance to start its throttling,
         # so anything in the Freqtradebot instance should be ready (initialized), including
@@ -81,9 +82,10 @@ class FreqtradeBot(LoggingMixin):
         # Keep this at the end of this initialization method.
         self.rpc: RPCManager = RPCManager(self)
 
-        self.pairlists = PairListManager(self.exchange, self.config)
+        self.dataprovider = DataProvider(self.config, self.exchange, rpc=self.rpc)
+        self.pairlists = PairListManager(self.exchange, self.config, self.dataprovider)
 
-        self.dataprovider = DataProvider(self.config, self.exchange, self.pairlists)
+        self.dataprovider.add_pairlisthandler(self.pairlists)
 
         # Attach Dataprovider to strategy instance
         self.strategy.dp = self.dataprovider
@@ -93,6 +95,10 @@ class FreqtradeBot(LoggingMixin):
         # Initializing Edge only if enabled
         self.edge = Edge(self.config, self.exchange, self.strategy) if \
             self.config.get('edge', {}).get('enabled', False) else None
+
+        # Init ExternalMessageConsumer if enabled
+        self.emc = ExternalMessageConsumer(self.config, self.dataprovider) if \
+            self.config.get('external_message_consumer', {}).get('enabled', False) else None
 
         self.active_pair_whitelist = self._refresh_active_whitelist()
 
@@ -153,9 +159,11 @@ class FreqtradeBot(LoggingMixin):
         finally:
             self.strategy.ft_bot_cleanup()
 
-            self.rpc.cleanup()
-            Trade.commit()
-            self.exchange.close()
+        self.rpc.cleanup()
+        if self.emc:
+            self.emc.shutdown()
+        Trade.commit()
+        self.exchange.close()
 
     def startup(self) -> None:
         """
@@ -256,6 +264,7 @@ class FreqtradeBot(LoggingMixin):
         pairs that have open trades.
         """
         # Refresh whitelist
+        _prev_whitelist = self.pairlists.whitelist
         self.pairlists.refresh_pairlist()
         _whitelist = self.pairlists.whitelist
 
@@ -268,6 +277,11 @@ class FreqtradeBot(LoggingMixin):
             # Extend active-pair whitelist with pairs of open trades
             # It ensures that candle (OHLCV) data are downloaded for open trades as well
             _whitelist.extend([trade.pair for trade in trades if trade.pair not in _whitelist])
+
+        # Called last to include the included pairs
+        if _prev_whitelist != _whitelist:
+            self.rpc.send_msg({'type': RPCMessageType.WHITELIST, 'data': _whitelist})
+
         return _whitelist
 
     def get_free_open_trades(self) -> int:
@@ -586,7 +600,7 @@ class FreqtradeBot(LoggingMixin):
             # We should decrease our position
             amount = self.exchange.amount_to_contract_precision(
                 trade.pair,
-                abs(float(FtPrecise(stake_amount) / FtPrecise(current_exit_rate))))
+                abs(float(FtPrecise(stake_amount * trade.leverage) / FtPrecise(current_exit_rate))))
             if amount > trade.amount:
                 # This is currently ineffective as remaining would become < min tradable
                 # Fixing this would require checking for 0.0 there -
@@ -596,7 +610,7 @@ class FreqtradeBot(LoggingMixin):
                 amount = trade.amount
 
             if amount == 0.0:
-                logger.info("Amount to sell is 0.0 due to exchange limits - not selling.")
+                logger.info("Amount to exit is 0.0 due to exchange limits - not exiting.")
                 return
 
             remaining = (trade.amount - amount) * current_exit_rate
@@ -923,7 +937,7 @@ class FreqtradeBot(LoggingMixin):
             'stake_amount': trade.stake_amount,
             'stake_currency': self.config['stake_currency'],
             'fiat_currency': self.config.get('fiat_display_currency', None),
-            'amount': order.safe_amount_after_fee if fill else order.amount,
+            'amount': order.safe_amount_after_fee if fill else (order.amount or trade.amount),
             'open_date': trade.open_date or datetime.utcnow(),
             'current_rate': current_rate,
             'sub_trade': sub_trade,
@@ -1329,11 +1343,12 @@ class FreqtradeBot(LoggingMixin):
             replacing: Optional[bool] = False
     ) -> bool:
         """
-        Buy cancel - cancel order
+        entry cancel - cancel order
         :param replacing: Replacing order - prevent trade deletion.
-        :return: True if order was fully cancelled
+        :return: True if trade was fully cancelled
         """
         was_trade_fully_canceled = False
+        side = trade.entry_side.capitalize()
 
         # Cancelled orders may have the status of 'canceled' or 'closed'
         if order['status'] not in constants.NON_OPEN_EXCHANGE_STATES:
@@ -1360,7 +1375,6 @@ class FreqtradeBot(LoggingMixin):
             corder = order
             reason = constants.CANCEL_REASON['CANCELLED_ON_EXCHANGE']
 
-        side = trade.entry_side.capitalize()
         logger.info('%s order %s for %s.', side, reason, trade)
 
         # Using filled to determine the filled amount
@@ -1374,24 +1388,13 @@ class FreqtradeBot(LoggingMixin):
                 was_trade_fully_canceled = True
                 reason += f", {constants.CANCEL_REASON['FULLY_CANCELLED']}"
             else:
-                # FIXME TODO: This could possibly reworked to not duplicate the code 15 lines below.
                 self.update_trade_state(trade, trade.open_order_id, corder)
-                trade.open_order_id = None
                 logger.info(f'{side} Order timeout for {trade}.')
         else:
-            # if trade is partially complete, edit the stake details for the trade
-            # and close the order
-            # cancel_order may not contain the full order dict, so we need to fallback
-            # to the order dict acquired before cancelling.
-            # we need to fall back to the values from order if corder does not contain these keys.
-            trade.amount = filled_amount
-            # * Check edge cases, we don't want to make leverage > 1.0 if we don't have to
-            # * (for leverage modes which aren't isolated futures)
-
-            trade.stake_amount = trade.amount * trade.open_rate / trade.leverage
+            # update_trade_state (and subsequently recalc_trade_from_orders) will handle updates
+            # to the trade object
             self.update_trade_state(trade, trade.open_order_id, corder)
 
-            trade.open_order_id = None
             logger.info(f'Partial {trade.entry_side} order timeout for {trade}.')
             reason += f", {constants.CANCEL_REASON['PARTIALLY_FILLED']}"
 
@@ -1428,8 +1431,6 @@ class FreqtradeBot(LoggingMixin):
             trade.close_rate_requested = None
             trade.close_profit = None
             trade.close_profit_abs = None
-            trade.close_date = None
-            trade.is_open = True
             trade.open_order_id = None
             trade.exit_reason = None
             cancelled = True
@@ -1599,14 +1600,14 @@ class FreqtradeBot(LoggingMixin):
         # second condition is for mypy only; order will always be passed during sub trade
         if sub_trade and order is not None:
             amount = order.safe_filled if fill else order.amount
-            profit_rate = order.safe_price
+            order_rate: float = order.safe_price
 
-            profit = trade.calc_profit(rate=profit_rate, amount=amount, open_rate=trade.open_rate)
-            profit_ratio = trade.calc_profit_ratio(profit_rate, amount, trade.open_rate)
+            profit = trade.calc_profit(rate=order_rate, amount=amount, open_rate=trade.open_rate)
+            profit_ratio = trade.calc_profit_ratio(order_rate, amount, trade.open_rate)
         else:
-            profit_rate = trade.close_rate if trade.close_rate else trade.close_rate_requested
-            profit = trade.calc_profit(rate=profit_rate) + (0.0 if fill else trade.realized_profit)
-            profit_ratio = trade.calc_profit_ratio(profit_rate)
+            order_rate = trade.close_rate if trade.close_rate else trade.close_rate_requested
+            profit = trade.calc_profit(rate=order_rate) + (0.0 if fill else trade.realized_profit)
+            profit_ratio = trade.calc_profit_ratio(order_rate)
             amount = trade.amount
         gain = "profit" if profit_ratio > 0 else "loss"
 
@@ -1619,11 +1620,12 @@ class FreqtradeBot(LoggingMixin):
             'leverage': trade.leverage,
             'direction': 'Short' if trade.is_short else 'Long',
             'gain': gain,
-            'limit': profit_rate,
+            'limit': order_rate,  # Deprecated
+            'order_rate': order_rate,
             'order_type': order_type,
             'amount': amount,
             'open_rate': trade.open_rate,
-            'close_rate': profit_rate,
+            'close_rate': order_rate,
             'current_rate': current_rate,
             'profit_amount': profit,
             'profit_ratio': profit_ratio,
@@ -1687,11 +1689,6 @@ class FreqtradeBot(LoggingMixin):
             'sub_trade': sub_trade,
             'stake_amount': trade.stake_amount,
         }
-
-        if 'fiat_display_currency' in self.config:
-            msg.update({
-                'fiat_currency': self.config['fiat_display_currency'],
-            })
 
         # Send the message
         self.rpc.send_msg(msg)

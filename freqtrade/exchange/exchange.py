@@ -1292,7 +1292,7 @@ class Exchange:
             order = self.fetch_order(order_id, pair)
         except InvalidOrderException:
             logger.warning(f"Could not fetch cancelled order {order_id}.")
-            order = {'fee': {}, 'status': 'canceled', 'amount': amount, 'info': {}}
+            order = {'id': order_id, 'fee': {}, 'status': 'canceled', 'amount': amount, 'info': {}}
 
         return order
 
@@ -2891,7 +2891,7 @@ def amount_to_contracts(amount: float, contract_size: Optional[float]) -> float:
     :return: num-contracts
     """
     if contract_size and contract_size != 1:
-        return amount / contract_size
+        return float(FtPrecise(amount) / FtPrecise(contract_size))
     else:
         return amount
 
@@ -2905,7 +2905,7 @@ def contracts_to_amount(num_contracts: float, contract_size: Optional[float]) ->
     """
 
     if contract_size and contract_size != 1:
-        return num_contracts * contract_size
+        return float(FtPrecise(num_contracts) * FtPrecise(contract_size))
     else:
         return num_contracts
 

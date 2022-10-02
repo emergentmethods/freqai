@@ -47,8 +47,7 @@ def ohlcv_to_dataframe(ohlcv: list, timeframe: str, pair: str, *,
 
 
 def clean_ohlcv_dataframe(data: DataFrame, timeframe: str, pair: str, *,
-                          fill_missing: bool = True,
-                          drop_incomplete: bool = True) -> DataFrame:
+                          fill_missing: bool, drop_incomplete: bool) -> DataFrame:
     """
     Cleanse a OHLCV dataframe by
       * Grouping it by date (removes duplicate tics)
@@ -292,6 +291,7 @@ def convert_ohlcv_format(
                 timeframe,
                 candle_type=candle_type
             ))
+        config['pairs'] = sorted(set(config['pairs']))
     logger.info(f"Converting candle (OHLCV) data for {config['pairs']}")
 
     for timeframe in timeframes:
@@ -302,7 +302,7 @@ def convert_ohlcv_format(
                                   drop_incomplete=False,
                                   startup_candles=0,
                                   candle_type=candle_type)
-            logger.info(f"Converting {len(data)} {candle_type} candles for {pair}")
+            logger.info(f"Converting {len(data)} {timeframe} {candle_type} candles for {pair}")
             if len(data) > 0:
                 trg.ohlcv_store(
                     pair=pair,
