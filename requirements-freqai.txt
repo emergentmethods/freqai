@@ -7,3 +7,4 @@ joblib==1.2.0
 catboost==1.0.6; platform_machine != 'aarch64'
 lightgbm==3.3.2
 xgboost==1.6.2
+sanpy==0.10.2

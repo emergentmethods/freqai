@@ -217,6 +217,8 @@ class FreqaiDataKitchen:
             if const_cols:
                 filtered_df = filtered_df.filter(filtered_df.columns.difference(const_cols))
                 logger.warning(f"Removed features {const_cols} with constant values.")
+                for drop in const_cols:
+                    self.training_features_list.remove(drop)  # .remove([const_cols])
             # we don't care about total row number (total no. datapoints) in training, we only care
             # about removing any row with NaNs
             # if labels has multiple columns (user wants to train multiple modelEs), we detect here

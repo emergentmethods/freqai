@@ -10,7 +10,7 @@ import pandas as pd
 import requests
 import san
 from pandas import DataFrame
-from san import Batch
+from san import AsyncBatch
 from san.graphql import execute_gql
 
 from freqtrade.configuration import TimeRange
@@ -290,13 +290,20 @@ class FreqaiAPI:
 
     def prepare_historic_dataframe(self, metric: str, slug: str,
                                    start: datetime, stop: datetime) -> bool:
-        projects = san.get("projects/all")
-        skip = False
-        if not projects['slug'].str.contains(slug).any():
-            logger.warning(f'{slug} not in projects list.')
-            return True
 
-        metrics = san.available_metrics_for_slug(slug)
+        skip = False
+        if slug in ["gold", "s-and-p-500"]:
+            metrics = ["price_usd"]
+        else:
+            if metric == "price_usd":
+                self.metric_slug_final.remove(f'{metric}/{slug}')
+                return True
+            projects = san.get("projects/all")
+            if not projects['slug'].str.contains(slug).any():
+                logger.warning(f'{slug} not in projects list.')
+                self.metric_slug_final.remove(f'{metric}/{slug}')
+                return True
+            metrics = san.available_metrics_for_slug(slug)
 
         if metric not in metrics:
             logger.warning(f'{metric} not in available {slug} metrics list. Skipping.')
@@ -355,7 +362,7 @@ class FreqaiAPI:
 
         san.ApiConfig.api_key = self.santiment_api_key
 
-        batch = Batch()
+        batch = AsyncBatch()
 
         # build batch to send to sanpi
         for key in metric_slug:
@@ -406,6 +413,9 @@ class FreqaiAPI:
         to_remove = []
         for metric in self.metric_slug_final:
             metric_dict[metric].rename(columns={'value': metric}, inplace=True)
+            # minInterval = self.dd.metric_update_tracker[metric]['minInterval']
+            # metric_dict[metric].index = (metric_dict[metric].index +
+            #               timedelta(seconds=timeframe_to_seconds(minInterval)))
             if (metric_dict[metric][metric] == 0.0).all():
                 logger.info(f'{metric} is all zeros, removing it from metric '
                             'list and never fetching again.')
@@ -414,6 +424,9 @@ class FreqaiAPI:
             dt = datetime.fromtimestamp(
                 int(metric_dict[metric].iloc[-1].name.timestamp()), timezone.utc)
             self.dd.metric_update_tracker[f'{metric}']['datetime_updated'] = dt
+            # Santiment stores their data at beginning of candle that contained the data.
+            # Everyone else stores it at end (As they should) so we fix santiment data for them.
+
             self.dd.historic_external_data = pd.merge(
                 self.dd.historic_external_data, metric_dict[metric],
                 how='left', on='datetime'
@@ -444,6 +457,10 @@ class FreqaiAPI:
                 continue
             dt = datetime.fromtimestamp(
                 int(metric_dict[metric].iloc[-1].name.timestamp()), timezone.utc)
+
+            # santiment stores data at beginning of candle where it was computed.
+            # minInterval = self.dd.metric_update_tracker[metric]['minInterval']
+            # dt += timedelta(seconds=timeframe_to_seconds(minInterval))
 
             if dt == self.dd.metric_update_tracker[f'{metric}']['datetime_updated']:
                 logger.info(
@@ -490,3 +507,23 @@ class FreqaiAPI:
                 length = pair_len
 
         return max_pair
+
+    def shift_and_concatenate_df(self, dataframe: pd.DataFrame, shifts: int) -> pd.DataFrame:
+        columns = []
+        for metric in dataframe.columns:
+            for shift in range(1, shifts + 1):
+                columns.append(f'{metric}_shift_{shift}')
+        shifted_df = DataFrame(
+            np.zeros((len(dataframe.index), len(dataframe.columns) * shifts)),
+            columns=columns, index=dataframe.index)
+        base_tf_seconds = timeframe_to_seconds(self.config['timeframe'])
+        for metric in dataframe.columns:
+            minInt = self.dd.metric_update_tracker[f'{metric}']['minInterval']
+            num_base_candles = timeframe_to_seconds(minInt) / base_tf_seconds
+            for shift in range(1, shifts + 1):
+                candle_shift = int(shift * num_base_candles)
+                shifted_df[f'{metric}_shift_{shift}'] = dataframe[metric].shift(candle_shift)
+
+        dataframe = pd.concat([dataframe, shifted_df], axis=1)
+
+        return dataframe
