@@ -338,6 +338,15 @@ class FreqaiAPI:
                 self.metric_slug_final.remove(f'{metric}/{slug}')
                 return True
 
+        minInt_sec = timeframe_to_seconds(meta_dict['minInterval'])
+        maxInt = self.freqai_config['santiment_config']['maxInt']
+        maxInt_sec = timeframe_to_seconds(self.freqai_config['santiment_config']['maxInt'])
+        if minInt_sec > maxInt_sec:
+            logger.warning(f'Removed {metric}/{slug} since its minimum interval was greater'
+                           f' than user requested {meta_dict["minInterval"]} > {maxInt}')
+            self.metric_slug_final.remove(f'{metric}/{slug}')
+            return True
+
         self.dd.metric_update_tracker[f'{metric}/{slug}']['minInterval'] = meta_dict['minInterval']
 
         return skip

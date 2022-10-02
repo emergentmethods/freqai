@@ -385,7 +385,7 @@ class IFreqaiModel(ABC):
             dataframe = self.dk.use_strategy_to_populate_indicators(
                 strategy, prediction_dataframe=dataframe, pair=metadata["pair"]
             )
-            if self.add_santiment_data and not self.dd.historic_external_data.empty:
+            if self.add_santiment_data and not self.dd.historic_external_data.empty and self.model:
                 dataframe = self.attach_santiment_data_to_prediction_features(dataframe, dk)
 
         if not self.model:
@@ -866,7 +866,7 @@ class IFreqaiModel(ABC):
         san_data = san_data.loc[:, san_data.columns != 'date']
         shifts = self.freqai_info['feature_parameters']['include_shifted_candles']
         san_data = self.api.shift_and_concatenate_df(san_data, shifts)
-        san_data.columns = [f'%-{c}' for c in san_data]
+        san_data.columns = [f'%%-{c}' for c in san_data]
         san_data = san_data.filter(dk.training_features_list, axis=1)
         san_data.set_index(df.index, inplace=True)
         df = pd.concat([df, san_data], axis=1)
@@ -916,7 +916,7 @@ class IFreqaiModel(ABC):
         shifts = self.freqai_info['feature_parameters']['include_shifted_candles']
         san_data = self.api.shift_and_concatenate_df(san_data, shifts)
 
-        san_data.columns = [f'%-{c}' for c in san_data]
+        san_data.columns = [f'%%-{c}' for c in san_data]
         san_data.set_index(unfiltered_dataframe.index, inplace=True)
 
         # add external data to the training features
