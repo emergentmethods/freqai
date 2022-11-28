@@ -2,6 +2,7 @@ import collections
 import importlib
 import logging
 import re
+import os
 import shutil
 import threading
 from datetime import datetime, timezone
@@ -126,6 +127,9 @@ class FreqaiDataDrawer:
         self.update_metric_tracker('cpu_load1min', load1 / cpus, pair)
         self.update_metric_tracker('cpu_load5min', load5 / cpus, pair)
         self.update_metric_tracker('cpu_load15min', load15 / cpus, pair)
+        process = psutil.Process(os.getpid())
+        ram = process.memory_info().rss
+        self.update_metric_tracker('ram_used', ram, pair)
 
     def load_drawer_from_disk(self):
         """
@@ -358,6 +362,13 @@ class FreqaiDataDrawer:
 
         df['close_price'].iloc[-1] = strat_df['close'].iloc[-1]
         df['date_pred'].iloc[-1] = strat_df['date'].iloc[-1]
+
+        if 'accuracy_score' not in df.columns:
+            df['accuracy_score'] = np.nan
+            df['accuracy_score_roll(10)mean'] = np.nan
+        else:
+            df['accuracy_score'].ffill(inplace=True)
+            df['accuracy_score_roll(10)mean'].ffill(inplace=True)
 
         self.model_return_values[pair] = df.tail(len_df).reset_index(drop=True)
 

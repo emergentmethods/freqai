@@ -21,7 +21,7 @@ from freqtrade.exceptions import OperationalException
 from freqtrade.exchange import timeframe_to_seconds
 from freqtrade.freqai.data_drawer import FreqaiDataDrawer
 from freqtrade.freqai.data_kitchen import FreqaiDataKitchen
-from freqtrade.freqai.utils import plot_feature_importance, record_params
+from freqtrade.freqai.utils import PerformanceTracker, plot_feature_importance, record_params
 from freqtrade.strategy.interface import IStrategy
 
 
@@ -244,6 +244,8 @@ class IFreqaiModel(ABC):
                 self.dd.save_historic_predictions_to_disk()
                 if self.freqai_info.get('write_metrics_to_disk', False):
                     self.dd.save_metric_tracker_to_disk()
+                if self.freqai_info.get('track_performance', False):
+                    PerformanceTracker(self.config, pair, self.dd, dk, bool(self.plot_features))
 
     def start_backtesting(
         self, dataframe: DataFrame, metadata: dict, dk: FreqaiDataKitchen
