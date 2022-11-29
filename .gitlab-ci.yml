@@ -50,12 +50,13 @@ run-isort:
     - isort --check freqtrade
 
 # Run mypy
-run-mypy:
-  stage: test
-  before_script: [] # Ignore global before_script
-  script:
-    - pip3 install mypy 
-    - mypy freqtrade scripts tests
+# run-mypy:
+#   image: $CI_REGISTRY_IMAGE/dependency
+#   stage: test
+#   # before_script: [] # Ignore global before_script
+#   script:
+#     - pip3 install mypy 
+#     - mypy freqtrade scripts tests
 
 # Build the docker image and push to the gitlab container registry
 docker-build:
@@ -69,3 +70,17 @@ docker-build:
     - docker login -u "$CI_REGISTRY_USER" -p "$CI_REGISTRY_PASSWORD" $CI_REGISTRY
     - docker build --pull -t "$CI_REGISTRY_IMAGE:$CI_COMMIT_BRANCH-latest" -t "$CI_REGISTRY_IMAGE:$CI_COMMIT_BRANCH-$CI_COMMIT_SHORT_SHA" .
     - docker push "$CI_REGISTRY_IMAGE" --all-tags
+
+
+# Build the docker image and push to the gitlab container registry
+docker-build-dependecies:
+  stage: build
+  image: docker:latest
+  services:
+    - docker:dind
+  before_script: [] # Ignore global before_script
+  script:
+    - docker build "$CI_REGISTRY_IMAGE/depencency" Dockerfile.deps
+    - docker login -u "$CI_REGISTRY_USER" -p "$CI_REGISTRY_PASSWORD" $CI_REGISTRY
+    - docker push "$CI_REGISTRY_IMAGE/dependency" --all-tags
+  when: manual
