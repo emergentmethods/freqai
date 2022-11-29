@@ -15,8 +15,8 @@ from freqtrade.data.history.history_utils import refresh_backtest_ohlcv_data
 from freqtrade.exceptions import OperationalException
 from freqtrade.exchange import timeframe_to_seconds
 from freqtrade.exchange.exchange import market_is_active
-from freqtrade.freqai.data_kitchen import FreqaiDataKitchen
 from freqtrade.freqai.data_drawer import FreqaiDataDrawer
+from freqtrade.freqai.data_kitchen import FreqaiDataKitchen
 from freqtrade.plot.plotting import go, make_subplots, store_plot_file
 from freqtrade.plugins.pairlist.pairlist_helpers import dynamic_expand_pairlist
 

@@ -28,25 +28,34 @@ before_script:
     pip install -r requirements-dev.txt
     pip install -e .
 
-# Run pytest
-run-pytest:
-  stage: test
-  script: pytest --random-order --cov=freqtrade --cov-config=.coveragerc
+# # Run pytest
+# run-pytest:
+#   stage: test
+#   script: pytest --random-order --cov=freqtrade --cov-config=.coveragerc
 
 # Run flake8
 run-flake8:
   stage: test
-  script: flake8 freqtrade
+  before_script: [] # Ignore global before_script
+  script: 
+    - pip3 install flake8
+    - flake8 freqtrade
 
 # Run isort
 run-isort:
   stage: test
-  script: isort --check freqtrade
+  before_script: [] # Ignore global before_script
+  script:
+    - pip3 install isort 
+    - isort --check freqtrade
 
 # Run mypy
 run-mypy:
   stage: test
-  script: mypy freqtrade scripts tests
+  before_script: [] # Ignore global before_script
+  script:
+    - pip3 install mypy 
+    - mypy freqtrade scripts tests
 
 # Build the docker image and push to the gitlab container registry
 docker-build:
