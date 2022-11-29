@@ -38,7 +38,7 @@ USER ftuser
 RUN  pip install --user --no-cache-dir numpy \
   && pip install --user --no-cache-dir -r requirements-hyperopt.txt \
   && pip install --user --no-cache-dir -r requirements-plot.txt \
-  && pip install --user --no-cache-dir -r requirements-freqai.txt \
+  && pip install --user --no-cache-dir -r requirements-freqai.txt
 
 # We add the FreqAI requirements here so we don't need a multi file build for our needs
 
