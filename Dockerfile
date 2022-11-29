@@ -33,10 +33,13 @@ RUN cd /tmp && /tmp/install_ta-lib.sh && rm -r /tmp/*ta-lib*
 ENV LD_LIBRARY_PATH /usr/local/lib
 
 # Install dependencies
-COPY --chown=ftuser:ftuser requirements.txt requirements-hyperopt.txt /freqtrade/
+COPY --chown=ftuser:ftuser requirements.txt requirements-hyperopt.txt requirements-freqai.txt /freqtrade/
 USER ftuser
 RUN  pip install --user --no-cache-dir numpy \
-  && pip install --user --no-cache-dir -r requirements-hyperopt.txt
+  && pip install --user --no-cache-dir -r requirements-hyperopt.txt \
+  && pip install --user --no-cache-dir -r requirements-freqai.txt
+
+# We add the FreqAI requirements here so we don't need a multi file build for our needs
 
 # Copy dependencies to runtime-image
 FROM base as runtime-image
