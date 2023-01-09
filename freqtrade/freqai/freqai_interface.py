@@ -244,8 +244,8 @@ class IFreqaiModel(ABC):
                 self.dd.save_historic_predictions_to_disk()
                 if self.freqai_info.get('write_metrics_to_disk', False):
                     self.dd.save_metric_tracker_to_disk()
-                if self.freqai_info.get('track_performance', False):
-                    PerformanceTracker(self.config, pair, self.dd, dk, bool(self.plot_features))
+                # if self.freqai_info.get('track_performance', False):
+                #     PerformanceTracker(self.config, pair, self.dd, dk, bool(self.plot_features))
 
     def start_backtesting(
         self, dataframe: DataFrame, metadata: dict, dk: FreqaiDataKitchen
@@ -402,6 +402,10 @@ class IFreqaiModel(ABC):
         dk.find_labels(dataframe)
 
         self.build_strategy_return_arrays(dataframe, dk, metadata["pair"], trained_timestamp)
+
+        if self.freqai_info.get('track_performance', False):
+            PerformanceTracker(self.config, metadata["pair"],
+                               self.dd, dk, bool(self.plot_features))
 
         return dk
 
