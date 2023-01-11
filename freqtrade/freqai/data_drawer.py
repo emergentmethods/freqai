@@ -365,10 +365,10 @@ class FreqaiDataDrawer:
 
         if 'accuracy_score' not in df.columns:
             df['accuracy_score'] = np.nan
-            df['accuracy_score_roll(10)mean'] = np.nan
+            df['balanced_accuracy'] = np.nan
         else:
             df['accuracy_score'].ffill(inplace=True)
-            df['accuracy_score_roll(10)mean'].ffill(inplace=True)
+            df['balanced_accuracy'].ffill(inplace=True)
 
         self.model_return_values[pair] = df.tail(len_df).reset_index(drop=True)
 

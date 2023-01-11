@@ -258,11 +258,10 @@ class PerformanceTracker:
             "label_period_candles", 0)
 
         self.historic_predictions: pd.DataFrame = pd.DataFrame()
-        self.df_pred_targ: pd.DataFrame
+        self.compute_model_performance(do_plot)
 
-        self.compute_performance(do_plot)
-
-    def compute_performance(self, do_plot: bool):
+    def compute_model_performance(self, do_plot: bool):
+        from datetime import datetime
 
         if self.pair not in self.dd.historic_predictions:
             logger.info(f'{self.pair} not yet in historic predictions. No accuracy to track yet.')
@@ -270,26 +269,121 @@ class PerformanceTracker:
 
         self.historic_predictions = self.dd.historic_predictions[self.pair]
 
-        self.df_pred_targ = self.create_pred_targ_df()
+        df_pred_targ = self.create_pred_targ_df()
         self.historic_predictions[
             ['prediction_min', 'target_min', 'prediction_max', 'target_max']
-        ] = self.df_pred_targ[['prediction_min', 'target_min', 'prediction_max', 'target_max']]
-        df_accuracy = self.get_accuracy_scores()
-        if df_accuracy[['prediction_min', 'prediction_max']].sum().sum():
-            df_metric = self.get_accuracy_metric(df_accuracy)
-            if not df_metric.empty:
-                self.historic_predictions['accuracy_score'] = df_metric['accuracy_score']
-                self.historic_predictions['accuracy_score_roll(10)mean'] \
-                    = df_metric['accuracy_score_roll(10)mean']
-                if do_plot:
-                    self.plot_accuracy_metric(df_metric=df_metric)
-        else:
-            df_metric = pd.DataFrame()
-            logger.info(f"No predictions for {self.pair} to calculate accuracy for.")
+        ] = df_pred_targ[['prediction_min', 'target_min', 'prediction_max', 'target_max']]
+
+        t_start = datetime.now()
+        accuracy = self.get_accuracy_metrics()
+        t_end = np.round((datetime.now() - t_start).total_seconds() * 1000, 2)
+
+        if bool(accuracy):
+            idx = np.where(self.historic_predictions['date_pred']
+                           == accuracy['date_balanced_accuracy'])[0]
+            self.historic_predictions.loc[idx, 'balanced_accuracy'] = accuracy['balanced_accuracy']
+            idx = np.where(self.historic_predictions['date_pred']
+                           == accuracy['date_shift_accuracy'])[0]
+            self.historic_predictions.loc[idx, 'accuracy_score'] = accuracy['shift_accuracy']
+            self.historic_predictions.loc[idx, 'metric_calc_duration_ms'] = t_end
+            curr_acc = np.round(accuracy['balanced_accuracy'], 2)
+            logger.info(f'Current balanced accuracy: {curr_acc}')
+            logger.info(f"Accuracy metric computation took {t_end} ms.")
+            if do_plot:
+                self.plot_accuracy_metric()
 
         return
 
-    def get_accuracy_metric(self, df_accuracy: pd.DataFrame):
+    def get_accuracy_metrics(self) -> Dict:
+        """
+        Calculate accuracy metrics: accuracy score based on matching predictions and targets (how
+        many shifted candles differ between matches), and a balanced accuracy score for the current
+        state of the modeling progress.
+        :returns:
+        :df_metric: dataframe containing accuracy metric and match and price scores
+        """
+        df_historic_predictions = self.historic_predictions
+
+        warmed_up = df_historic_predictions[
+            df_historic_predictions['&s-minima_sort_threshold'] > -2
+        ]
+
+        if not warmed_up.shape[0]:
+            logger.info(
+                f'Warmup is not done. '
+                f'No predictions for {self.pair} to calculate accuracy for.'
+            )
+            accuracy: Dict = {}
+
+            return accuracy
+
+        warmed_up_idx = warmed_up.index[0]
+
+        df_accuracy = self.match_preds_to_targs()
+
+        if df_accuracy[['prediction_min', 'prediction_max']].sum().sum():
+            df_metric = self.get_accuracy_score(df_accuracy=df_accuracy)
+            shift_accuracy = df_metric.loc[df_metric.index[-1], 'accuracy_score']
+            date_shift_accuracy = df_historic_predictions.loc[df_metric.index[-1], 'date_pred']
+        else:
+            logger.info(
+                f'Warmup is done but there are no predicted extrema '
+                f'for {self.pair} to calculate accuracy for.'
+            )
+            shift_accuracy = np.nan
+            date_shift_accuracy = df_historic_predictions.loc[
+                df_historic_predictions.index[-1], 'date_pred'
+            ]
+
+        df_hist = df_historic_predictions.loc[warmed_up_idx:]
+
+        df_min = df_hist[['prediction_min', 'target_min']]
+        matches = np.where(df_min['prediction_min'] == df_min['target_min'])[0]
+        true_positives_min = (df_min.iloc[matches].sum(axis=1) == 2).sum()
+        true_negatives_min = (df_min.iloc[matches].sum(axis=1) == 0).sum()
+        not_matches = np.where(df_min['prediction_min'] != df_min['target_min'])[0]
+        false_positives_min = (df_min['prediction_min'].iloc[not_matches]).sum()
+
+        df_max = df_hist[['prediction_max', 'target_max']]
+        matches = np.where(df_max['prediction_max'] == df_max['target_max'])[0]
+        true_positives_max = (df_max.iloc[matches].sum(axis=1) == 2).sum()
+        true_negatives_max = (df_max.iloc[matches].sum(axis=1) == 0).sum()
+        not_matches = np.where(df_max['prediction_max'] != df_max['target_max'])[0]
+        false_positives_max = (df_max['prediction_max'].iloc[not_matches]).sum()
+
+        total_positives = df_hist[['target_min', 'target_max']].sum().sum()
+
+        total_negatives = true_negatives_min + true_negatives_max + \
+            false_positives_min + false_positives_max
+
+        true_positives = true_positives_min + true_positives_max
+
+        true_negatives = true_negatives_min + true_negatives_max
+
+        sensitivity = true_positives / total_positives
+        if not sensitivity == sensitivity:
+            sensitivity = 0
+
+        specificity = true_negatives / total_negatives
+        if not specificity == specificity:
+            specificity = 0
+
+        balanced_accuracy = (sensitivity + specificity) / 2
+
+        if balanced_accuracy < 0:
+            logger.info(f"Warning: the balanced accuracy is negative.\n"
+                        f"Specificity: {specificity}\n"
+                        f"Sensitivity: {sensitivity}"
+                        )
+
+        accuracy = {'balanced_accuracy': balanced_accuracy,
+                    'date_balanced_accuracy': df_hist['date_pred'].iloc[-1],
+                    'date_shift_accuracy': date_shift_accuracy,
+                    'shift_accuracy': shift_accuracy}
+
+        return accuracy  # df_metric.sort_index()
+
+    def get_accuracy_score(self, df_accuracy: pd.DataFrame):
         """
         Calculate an accuracy metric based on accuracy scores from matching predictions to targets.
         :params:
@@ -305,30 +399,27 @@ class PerformanceTracker:
         df_metric['price_score'] = 1 - \
             (df_accuracy['close_price'] - df_accuracy['target_close']).abs() \
             / (df_accuracy['close_price'].max() - df_accuracy['close_price'].min())
-        df_metric['min_shift_score'] = 1 / \
-            ((df_accuracy['prediction_min_idx'] - df_accuracy['target_min_idx']).abs() + 1)
-        df_metric['max_shift_score'] = 1 / \
-            ((df_accuracy['prediction_max_idx'] - df_accuracy['target_max_idx']).abs() + 1)
+
+        df_metric['min_shift_score'] = 1 - \
+            (df_accuracy['prediction_min_idx'] - df_accuracy['target_min_idx']).abs() /\
+            (2 * self.label_period_candles)
+        df_metric['max_shift_score'] = 1 - \
+            (df_accuracy['prediction_max_idx'] - df_accuracy['target_max_idx']).abs() /\
+            (2 * self.label_period_candles)
         df_metric['match_score'] = \
             df_metric['min_shift_score'].fillna(df_metric['max_shift_score'])
-        df_metric['accuracy_score'] = (
-            df_metric['price_score'].fillna(0) + df_metric['match_score']
-        ) / 2
+        df_metric['accuracy_score'] = df_metric['match_score']
         df_metric.dropna(axis=0, how='all', inplace=True)
         df_metric['date'] = df_accuracy['date']
 
-        kernel = 10
-        df_metric[f'accuracy_score_roll({10})mean'] = \
-            df_metric['accuracy_score'].rolling(kernel).mean()
-        df_metric = df_metric[['accuracy_score', f'accuracy_score_roll({10})mean',
-                               'match_score', 'price_score',
+        df_metric = df_metric[['accuracy_score', 'match_score', 'price_score',
                                'prediction_idx', 'date']]
         df_metric = df_metric.set_index(df_metric['prediction_idx'].astype(int))
         df_metric.drop('prediction_idx', axis=1, inplace=True)
 
         return df_metric
 
-    def get_accuracy_scores(self):
+    def match_preds_to_targs(self):
         """
         Match predictions to targets and get distances between matches, and corresponding close
         prices.
@@ -338,7 +429,9 @@ class PerformanceTracker:
         """
         from scipy.spatial.distance import cdist
 
-        df_accuracy = copy.deepcopy(self.df_pred_targ)
+        df_accuracy = copy.deepcopy(self.historic_predictions[
+            ['prediction_min', 'target_min', 'prediction_max', 'target_max']
+        ])
 
         df_accuracy['close_price'] = self.historic_predictions['close_price']
         df_accuracy['date'] = self.historic_predictions['date_pred']
@@ -394,7 +487,10 @@ class PerformanceTracker:
         else:
             df_accuracy[['target_max_idx']] = np.NaN
         if self.verbosity:
-            totals = self.df_pred_targ.abs().sum(axis=0)
+            # totals = self.df_pred_targ.abs().sum(axis=0)
+            totals = self.historic_predictions[
+                ['prediction_min', 'target_min', 'prediction_max', 'target_max']
+                ].abs().sum(axis=0)
             identified = df_accuracy[
                 ['prediction_min', 'target_min', 'prediction_max', 'target_max']
             ].sum(axis=0)
@@ -464,20 +560,6 @@ class PerformanceTracker:
             order=self.label_period_candles)[0]
         df_pred_targ.loc[target_max_idx, 'target_max'] = 1
 
-        # df["&s-extrema"] = 0
-        # min_peaks = argrelextrema(
-        #     df["close"].values, np.less,
-        #     order=self.freqai_info["feature_parameters"]["label_period_candles"]
-        # )
-        # max_peaks = argrelextrema(
-        #     df["close"].values, np.greater,
-        #     order=self.freqai_info["feature_parameters"]["label_period_candles"]
-        # )
-        # for mp in min_peaks[0]:
-        #     df.at[mp, "&s-extrema"] = -1
-        # for mp in max_peaks[0]:
-        #     df.at[mp, "&s-extrema"] = 1
-
         return df_pred_targ
 
     def plot_predictions_targets(self, fig: make_subplots) -> make_subplots:
@@ -488,14 +570,15 @@ class PerformanceTracker:
         :returns:
         :fig: plotted close price chart with prediction and target maxima and minima
         """
-        def add_feature_trace(fig, fi_df_price, fi_df_locs, label, colors, price_offset):
+        # def add_feature_trace(fig, fi_df_price, fi_df_locs, label, colors, price_offset):
+        def add_feature_trace(fig, fi_df, label, colors, price_offset):
             text_offset = 10
             text = ''.join((label[0].upper(), label[1:], 's'))
             fig.add_trace(
                 go.Scatter(
                     mode='lines',
-                    x=fi_df_price['date_pred'],
-                    y=fi_df_price['close_price'] * price_offset,
+                    x=fi_df['date_pred'],
+                    y=fi_df['close_price'] * price_offset,
                     name=f'Offset x{price_offset}',
                     line=dict(color='rgb(127, 127, 127, 0.5)'),
                     showlegend=False,
@@ -508,11 +591,11 @@ class PerformanceTracker:
                 fig.add_trace(
                     go.Scatter(
                         mode='markers',
-                        x=fi_df_price.loc[
-                            fi_df_locs[fi_df_locs[f'{label}_{identifiers[i]}'].eq(1)].index
+                        x=fi_df.loc[
+                            fi_df[fi_df[f'{label}_{identifiers[i]}'].eq(1)].index
                         ]['date_pred'],
-                        y=fi_df_price.loc[
-                            fi_df_locs[fi_df_locs[f'{label}_{identifiers[i]}'].eq(1)].index
+                        y=fi_df.loc[
+                            fi_df[fi_df[f'{label}_{identifiers[i]}'].eq(1)].index
                         ]['close_price'] * price_offset,
                         name=''.join((text[:4], f'. {identifiers[i]}ima')),
                         marker=dict(color=colors[i], symbol=markers[i], size=12,
@@ -524,8 +607,8 @@ class PerformanceTracker:
                 dict(
                     text=text,
                     font=dict(color='rgb(127, 127, 127, 0.5)'),
-                    x=fi_df_price['date_pred'].values[-1] + text_offset,
-                    y=fi_df_price['close_price'].values[-1] * price_offset,
+                    x=fi_df['date_pred'].values[-1] + text_offset,
+                    y=fi_df['close_price'].values[-1] * price_offset,
                     showarrow=False,
                     xanchor='left',
                     xref="x",
@@ -534,18 +617,18 @@ class PerformanceTracker:
             )
             return fig
 
-        fig = add_feature_trace(fig, self.historic_predictions, self.df_pred_targ,
+        fig = add_feature_trace(fig, self.historic_predictions,
                                 label='prediction',
                                 colors=['rgb(214, 39, 40)', 'rgb(44, 160, 44)'],
                                 price_offset=1)
-        fig = add_feature_trace(fig, self.historic_predictions, self.df_pred_targ,
+        fig = add_feature_trace(fig, self.historic_predictions,
                                 label='target',
                                 colors=['rgb(227, 119, 194)', 'rgb(23, 190, 207)'],
                                 price_offset=1.02)
 
         return fig
 
-    def plot_accuracy_metric(self, df_metric: pd.DataFrame) -> None:
+    def plot_accuracy_metric(self) -> None:
         """
         Plot matched predictions-targets with accuracy metric.
         :params:
@@ -555,11 +638,11 @@ class PerformanceTracker:
         fig = self.plot_predictions_targets(fig=fig)
 
         def add_feature_trace(fig, fi_df, label, colors):
-            text = f'Avg. {fi_df.iloc[:, label[0]].mean().round(3)}'
+            text = f'Avg. {fi_df.loc[:, label[0]].mean().round(3)}'
             fig.add_trace(
                 go.Scatter(
-                    x=fi_df['date'],
-                    y=fi_df.iloc[:, label[0]],
+                    x=fi_df['date_pred'],
+                    y=fi_df.loc[:, label[0]],
                     showlegend=True,
                     name=label[1],
                     line=dict(color=colors[0]),
@@ -570,8 +653,8 @@ class PerformanceTracker:
                 dict(
                     text=text,
                     font=dict(color=colors[0]),
-                    x=fi_df['date'].values[-1],
-                    y=fi_df.iloc[-1, label[0]],
+                    x=fi_df['date_pred'].values[-1],
+                    y=fi_df[label[0]].iloc[-1],
                     showarrow=False,
                     xanchor='left',
                     xref="x",
@@ -580,14 +663,20 @@ class PerformanceTracker:
             )
             return fig
 
-        fig = add_feature_trace(
-            fig=fig, fi_df=df_metric, label=[0, 'Accuracy score'],
-            colors=['rgb(214, 39, 40)']
-        )
-        if not all(df_metric['accuracy_score_roll(10)mean'].isnull()):
+        df_metric = self.historic_predictions
+
+        if not all(df_metric['balanced_accuracy'].isnull()):
             fig = add_feature_trace(
-                fig=fig, fi_df=df_metric, label=[1, 'Accuracy score (rolling mean)'],
-                colors=['rgb(188, 189, 34)']
+                fig=fig, fi_df=df_metric[['date_pred', 'balanced_accuracy']].ffill(),
+                label=['balanced_accuracy', 'Balanced accuracy'],
+                colors=['rgb(34, 189, 117)']
+            )
+        if not all(df_metric['accuracy_score'].isnull()):
+            fig = add_feature_trace(
+                fig=fig, fi_df=df_metric[['date_pred', 'accuracy_score']].dropna(
+                    subset='accuracy_score'),
+                label=['accuracy_score', 'Accuracy score'],
+                colors=['rgb(214, 39, 40)']
             )
 
         fig.update_yaxes(
@@ -596,7 +685,7 @@ class PerformanceTracker:
         )
         fig.update_yaxes(
             showgrid=True, title_text="<b>Accuracy score</b>",
-            secondary_y=True, range=[-0.01, 1.01]
+            secondary_y=True  # , range=[-0.01, 1.01]
         )
         fig.update_layout(title_text=f"<b>Accuracy score for {self.pair}</b>")
 
