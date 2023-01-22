@@ -283,11 +283,11 @@ class PerformanceTracker:
         if bool(accuracy):
             idx = np.where(self.historic_predictions['date_pred']
                            == accuracy['date_balanced_accuracy'])[0]
-            self.historic_predictions.iloc[idx, 'balanced_accuracy'] = accuracy['balanced_accuracy']
+            self.historic_predictions['balanced_accuracy'].iloc[idx] = accuracy['balanced_accuracy']
             idx = np.where(self.historic_predictions['date_pred']
                            == accuracy['date_shift_accuracy'])[0]
-            self.historic_predictions.iloc[idx, 'accuracy_score'] = accuracy['shift_accuracy']
-            self.historic_predictions.iloc[idx, 'metric_calc_duration_ms'] = t_end
+            self.historic_predictions['accuracy_score'].iloc[idx] = accuracy['shift_accuracy']
+            self.historic_predictions['metric_calc_duration_ms'].iloc[idx] = t_end
             curr_acc = np.round(accuracy['balanced_accuracy'], 2)
             logger.debug(f'Current balanced accuracy: {curr_acc}')
             logger.debug(f"Accuracy metric computation took {t_end} ms.")
@@ -556,11 +556,11 @@ class PerformanceTracker:
         target_min_idx = argrelextrema(
             self.historic_predictions['close_price'].values, np.less,
             order=self.label_period_candles)[0]
-        df_pred_targ.iloc[target_min_idx, 'target_min'] = 1
+        df_pred_targ['target_min'].iloc[target_min_idx] = 1
         target_max_idx = argrelextrema(
             self.historic_predictions['close_price'].values, np.greater,
             order=self.label_period_candles)[0]
-        df_pred_targ.iloc[target_max_idx, 'target_max'] = 1
+        df_pred_targ['target_max'].iloc[target_max_idx] = 1
 
         return df_pred_targ
 
