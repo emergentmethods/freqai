@@ -31,7 +31,7 @@ HYPEROPT_LOSS_BUILTIN = ['ShortTradeDurHyperOptLoss', 'OnlyProfitHyperOptLoss',
                          'CalmarHyperOptLoss',
                          'MaxDrawDownHyperOptLoss', 'MaxDrawDownRelativeHyperOptLoss',
                          'ProfitDrawDownHyperOptLoss']
-AVAILABLE_PAIRLISTS = ['StaticPairList', 'VolumePairList', 'ProducerPairList',
+AVAILABLE_PAIRLISTS = ['StaticPairList', 'VolumePairList', 'ProducerPairList', 'RemotePairList',
                        'AgeFilter', 'OffsetFilter', 'PerformanceFilter',
                        'PrecisionFilter', 'PriceFilter', 'RangeStabilityFilter',
                        'ShuffleFilter', 'SpreadFilter', 'VolatilityFilter']
@@ -61,6 +61,7 @@ USERPATH_FREQAIMODELS = 'freqaimodels'
 
 TELEGRAM_SETTING_OPTIONS = ['on', 'off', 'silent']
 WEBHOOK_FORMAT_OPTIONS = ['form', 'json', 'raw']
+FULL_DATAFRAME_THRESHOLD = 100
 
 ENV_VAR_PREFIX = 'FREQTRADE__'
 
@@ -591,6 +592,7 @@ CONF_SCHEMA = {
                         "model_type": {"type": "string", "default": "PPO"},
                         "policy_type": {"type": "string", "default": "MlpPolicy"},
                         "net_arch": {"type": "array", "default": [128, 128]},
+                        "randomize_startinng_position": {"type": "boolean", "default": False},
                         "model_reward_parameters": {
                             "type": "object",
                             "properties": {
@@ -607,9 +609,8 @@ CONF_SCHEMA = {
                 "backtest_period_days",
                 "identifier",
                 "feature_parameters",
-                "data_split_parameters",
-                "model_training_parameters"
-                ]
+                "data_split_parameters"
+            ]
         },
     },
 }
@@ -635,7 +636,6 @@ SCHEMA_TRADE_REQUIRED = [
 
 SCHEMA_BACKTEST_REQUIRED = [
     'exchange',
-    'max_open_trades',
     'stake_currency',
     'stake_amount',
     'dry_run_wallet',
@@ -645,6 +645,7 @@ SCHEMA_BACKTEST_REQUIRED = [
 SCHEMA_BACKTEST_REQUIRED_FINAL = SCHEMA_BACKTEST_REQUIRED + [
     'stoploss',
     'minimal_roi',
+    'max_open_trades'
 ]
 
 SCHEMA_MINIMAL_REQUIRED = [
@@ -680,3 +681,4 @@ MakerTaker = Literal['maker', 'taker']
 BidAsk = Literal['bid', 'ask']
 
 Config = Dict[str, Any]
+IntOrInf = float

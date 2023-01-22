@@ -33,6 +33,7 @@ from freqtrade.rpc.external_message_consumer import ExternalMessageConsumer
 from freqtrade.strategy.interface import IStrategy
 from freqtrade.strategy.strategy_wrapper import strategy_safe_wrapper
 from freqtrade.util import FtPrecise
+from freqtrade.util.binance_mig import migrate_binance_futures_names
 from freqtrade.wallets import Wallets
 
 
@@ -155,6 +156,8 @@ class FreqtradeBot(LoggingMixin):
                 self.cancel_all_open_orders()
 
             self.check_for_open_trades()
+        except Exception as e:
+            logger.warning(f'Exception during cleanup: {e.__class__.__name__} {e}')
 
         finally:
             self.strategy.ft_bot_cleanup()
@@ -162,14 +165,21 @@ class FreqtradeBot(LoggingMixin):
         self.rpc.cleanup()
         if self.emc:
             self.emc.shutdown()
-        Trade.commit()
         self.exchange.close()
+        try:
+            Trade.commit()
+        except Exception:
+            # Exeptions here will be happening if the db disappeared.
+            # At which point we can no longer commit anyway.
+            pass
 
     def startup(self) -> None:
         """
         Called on startup and after reloading the bot - triggers notifications and
         performs startup tasks
         """
+        migrate_binance_futures_names(self.config)
+
         self.rpc.startup_messages(self.config, self.pairlists, self.protections)
         # Update older trades with precision and precision mode
         self.startup_backpopulate_precision()
@@ -367,7 +377,7 @@ class FreqtradeBot(LoggingMixin):
         for trade in trades:
             if not trade.is_open and not trade.fee_updated(trade.exit_side):
                 # Get sell fee
-                order = trade.select_order(trade.exit_side, False)
+                order = trade.select_order(trade.exit_side, False, only_filled=True)
                 if not order:
                     order = trade.select_order('stoploss', False)
                 if order:
@@ -383,7 +393,7 @@ class FreqtradeBot(LoggingMixin):
         for trade in trades:
             with self._exit_lock:
                 if trade.is_open and not trade.fee_updated(trade.entry_side):
-                    order = trade.select_order(trade.entry_side, False)
+                    order = trade.select_order(trade.entry_side, False, only_filled=True)
                     open_order = trade.select_order(trade.entry_side, True)
                     if order and open_order is None:
                         logger.info(
@@ -713,7 +723,7 @@ class FreqtradeBot(LoggingMixin):
             time_in_force=time_in_force,
             leverage=leverage
         )
-        order_obj = Order.parse_from_ccxt_object(order, pair, side)
+        order_obj = Order.parse_from_ccxt_object(order, pair, side, amount, enter_limit_requested)
         order_id = order['id']
         order_status = order.get('status')
         logger.info(f"Order #{order_id} was created for {pair} and status is {order_status}.")
@@ -905,6 +915,7 @@ class FreqtradeBot(LoggingMixin):
             stake_amount=stake_amount,
             min_stake_amount=min_stake_amount,
             max_stake_amount=max_stake_amount,
+            trade_amount=trade.stake_amount if trade else None,
         )
 
         return enter_limit_requested, stake_amount, leverage
@@ -1086,7 +1097,8 @@ class FreqtradeBot(LoggingMixin):
                 leverage=trade.leverage
             )
 
-            order_obj = Order.parse_from_ccxt_object(stoploss_order, trade.pair, 'stoploss')
+            order_obj = Order.parse_from_ccxt_object(stoploss_order, trade.pair, 'stoploss',
+                                                     trade.amount, stop_price)
             trade.orders.append(order_obj)
             trade.stoploss_order_id = str(stoploss_order['id'])
             trade.stoploss_last_update = datetime.now(timezone.utc)
@@ -1587,7 +1599,7 @@ class FreqtradeBot(LoggingMixin):
             self.handle_insufficient_funds(trade)
             return False
 
-        order_obj = Order.parse_from_ccxt_object(order, trade.pair, trade.exit_side)
+        order_obj = Order.parse_from_ccxt_object(order, trade.pair, trade.exit_side, amount, limit)
         trade.orders.append(order_obj)
 
         trade.open_order_id = order['id']

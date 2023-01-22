@@ -54,6 +54,9 @@ This configuration enables kraken, as well as rate-limiting to avoid bans from t
 
 ## Binance
 
+!!! Warning "Server location and geo-ip restrictions"
+    Please be aware that binance restrict api access regarding the server country. The currents and non exhaustive countries blocked are United States, Malaysia (Singapour), Ontario (Canada). Please go to [binance terms > b. Eligibility](https://www.binance.com/en/terms) to find up to date list.
+
 Binance supports [time_in_force](configuration.md#understand-order_time_in_force).
 
 !!! Tip "Stoploss on Exchange"
@@ -71,6 +74,25 @@ Binance has been split into 2, and users must use the correct ccxt exchange ID f
 
 * [binance.com](https://www.binance.com/) - International users. Use exchange id: `binance`.
 * [binance.us](https://www.binance.us/) - US based users. Use exchange id: `binanceus`.
+
+### Binance RSA keys
+
+Freqtrade supports binance RSA API keys.
+
+We recommend to use them as environment variable.
+
+``` bash
+export FREQTRADE__EXCHANGE__SECRET="$(cat ./rsa_binance.private)"
+```
+
+They can however also be configured via configuration file. Since json doesn't support multi-line strings, you'll have to replace all newlines with `\n` to have a valid json file.
+
+``` json
+// ...
+ "key": "<someapikey>",
+ "secret": "-----BEGIN PRIVATE KEY-----\nMIIEvQIBABACAFQA<...>s8KX8=\n-----END PRIVATE KEY-----"
+// ...
+```
 
 ### Binance Futures
 

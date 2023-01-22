@@ -5,7 +5,7 @@ import os
 import re
 import shutil
 import threading
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, Tuple, TypedDict
 
@@ -83,6 +83,7 @@ class FreqaiDataDrawer:
         self.historic_predictions_bkp_path = Path(
             self.full_path / "historic_predictions.backup.pkl")
         self.pair_dictionary_path = Path(self.full_path / "pair_dictionary.json")
+        self.global_metadata_path = Path(self.full_path / "global_metadata.json")
         self.metric_tracker_path = Path(self.full_path / "metric_tracker.json")
         self.follow_mode = follow_mode
         if follow_mode:
@@ -130,6 +131,17 @@ class FreqaiDataDrawer:
         process = psutil.Process(os.getpid())
         ram = process.memory_info().rss
         self.update_metric_tracker('ram_used', ram, pair)
+
+    def load_global_metadata_from_disk(self):
+        """
+        Locate and load a previously saved global metadata in present model folder.
+        """
+        exists = self.global_metadata_path.is_file()
+        if exists:
+            with open(self.global_metadata_path, "r") as fp:
+                metatada_dict = rapidjson.load(fp, number_mode=rapidjson.NM_NATIVE)
+                return metatada_dict
+        return {}
 
     def load_drawer_from_disk(self):
         """
@@ -230,6 +242,15 @@ class FreqaiDataDrawer:
         with open(self.follower_dict_path, "w") as fp:
             rapidjson.dump(self.follower_dict, fp, default=self.np_encoder,
                            number_mode=rapidjson.NM_NATIVE)
+
+    def save_global_metadata_to_disk(self, metadata: Dict[str, Any]):
+        """
+        Save global metadata json to disk
+        """
+        with self.save_lock:
+            with open(self.global_metadata_path, 'w') as fp:
+                rapidjson.dump(metadata, fp, default=self.np_encoder,
+                               number_mode=rapidjson.NM_NATIVE)
 
     def create_follower_dict(self):
         """
@@ -493,7 +514,7 @@ class FreqaiDataDrawer:
             dump(model, save_path / f"{dk.model_filename}_model.joblib")
         elif self.model_type == 'keras':
             model.save(save_path / f"{dk.model_filename}_model.h5")
-        elif 'stable_baselines' in self.model_type:
+        elif 'stable_baselines' in self.model_type or 'sb3_contrib' == self.model_type:
             model.save(save_path / f"{dk.model_filename}_model.zip")
 
         if dk.svm_model is not None:
@@ -579,9 +600,9 @@ class FreqaiDataDrawer:
         elif self.model_type == 'keras':
             from tensorflow import keras
             model = keras.models.load_model(dk.data_path / f"{dk.model_filename}_model.h5")
-        elif self.model_type == 'stable_baselines':
+        elif 'stable_baselines' in self.model_type or 'sb3_contrib' == self.model_type:
             mod = importlib.import_module(
-                'stable_baselines3', self.freqai_info['rl_config']['model_type'])
+                self.model_type, self.freqai_info['rl_config']['model_type'])
             MODELCLASS = getattr(mod, self.freqai_info['rl_config']['model_type'])
             model = MODELCLASS.load(dk.data_path / f"{dk.model_filename}_model")
 
@@ -707,3 +728,31 @@ class FreqaiDataDrawer:
                         ).reset_index(drop=True)
 
         return corr_dataframes, base_dataframes
+
+    def get_timerange_from_live_historic_predictions(self) -> TimeRange:
+        """
+        Returns timerange information based on historic predictions file
+        :return: timerange calculated from saved live data
+        """
+        if not self.historic_predictions_path.is_file():
+            raise OperationalException(
+                'Historic predictions not found. Historic predictions data is required '
+                'to run backtest with the freqai-backtest-live-models option '
+            )
+
+        self.load_historic_predictions_from_disk()
+
+        all_pairs_end_dates = []
+        for pair in self.historic_predictions:
+            pair_historic_data = self.historic_predictions[pair]
+            all_pairs_end_dates.append(pair_historic_data.date_pred.max())
+
+        global_metadata = self.load_global_metadata_from_disk()
+        start_date = datetime.fromtimestamp(int(global_metadata["start_dry_live_date"]))
+        end_date = max(all_pairs_end_dates)
+        # add 1 day to string timerange to ensure BT module will load all dataframe data
+        end_date = end_date + timedelta(days=1)
+        backtesting_timerange = TimeRange(
+            'date', 'date', int(start_date.timestamp()), int(end_date.timestamp())
+        )
+        return backtesting_timerange
