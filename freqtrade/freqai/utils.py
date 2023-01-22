@@ -267,9 +267,9 @@ class PerformanceTracker:
         if self.pair not in self.dd.historic_predictions:
             logger.info(f'{self.pair} not yet in historic predictions. No accuracy to track yet.')
             return
-        num_candles = self.config["freqai"].get("fit_live_predictions_candles", 600)
+        # num_candles = self.config["freqai"].get("fit_live_predictions_candles", 600)
 
-        self.historic_predictions = self.dd.historic_predictions[self.pair].tail(num_candles)
+        self.historic_predictions = self.dd.historic_predictions[self.pair]  # .tail(num_candles)
 
         df_pred_targ = self.create_pred_targ_df()
         self.historic_predictions[
