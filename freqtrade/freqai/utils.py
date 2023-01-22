@@ -266,8 +266,9 @@ class PerformanceTracker:
         if self.pair not in self.dd.historic_predictions:
             logger.info(f'{self.pair} not yet in historic predictions. No accuracy to track yet.')
             return
+        num_candles = self.config["freqai"].get("fit_live_predictions_candles", 600)
 
-        self.historic_predictions = self.dd.historic_predictions[self.pair]
+        self.historic_predictions = self.dd.historic_predictions[self.pair].tail(num_candles)
 
         df_pred_targ = self.create_pred_targ_df()
         self.historic_predictions[
@@ -287,8 +288,8 @@ class PerformanceTracker:
             self.historic_predictions.loc[idx, 'accuracy_score'] = accuracy['shift_accuracy']
             self.historic_predictions.loc[idx, 'metric_calc_duration_ms'] = t_end
             curr_acc = np.round(accuracy['balanced_accuracy'], 2)
-            logger.info(f'Current balanced accuracy: {curr_acc}')
-            logger.info(f"Accuracy metric computation took {t_end} ms.")
+            logger.debug(f'Current balanced accuracy: {curr_acc}')
+            logger.debug(f"Accuracy metric computation took {t_end} ms.")
             if do_plot:
                 self.plot_accuracy_metric()
 
@@ -371,10 +372,10 @@ class PerformanceTracker:
         balanced_accuracy = (sensitivity + specificity) / 2
 
         if balanced_accuracy < 0:
-            logger.info(f"Warning: the balanced accuracy is negative.\n"
-                        f"Specificity: {specificity}\n"
-                        f"Sensitivity: {sensitivity}"
-                        )
+            logger.warning(f"Warning: the balanced accuracy is negative.\n"
+                           f"Specificity: {specificity}\n"
+                           f"Sensitivity: {sensitivity}"
+                           )
 
         accuracy = {'balanced_accuracy': balanced_accuracy,
                     'date_balanced_accuracy': df_hist['date_pred'].iloc[-1],
@@ -494,10 +495,10 @@ class PerformanceTracker:
             identified = df_accuracy[
                 ['prediction_min', 'target_min', 'prediction_max', 'target_max']
             ].sum(axis=0)
-            print(f'Nmb identified predictions: '
-                  f'{identified[0]+identified[2]} / {totals[0]+totals[2]}')
-            print(f'Nmb identified targets: '
-                  f'{identified[1]+identified[3]} / {totals[1]+totals[3]}')
+            logger.info(f'Nmb identified predictions: '
+                        f'{identified[0]+identified[2]} / {totals[0]+totals[2]}')
+            logger.info(f'Nmb identified targets: '
+                        f'{identified[1]+identified[3]} / {totals[1]+totals[3]}')
 
         return df_accuracy.reset_index(drop=True)
 

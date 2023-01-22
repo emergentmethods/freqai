@@ -405,7 +405,7 @@ class IFreqaiModel(ABC):
 
         if self.freqai_info.get('track_performance', False):
             PerformanceTracker(self.config, metadata["pair"],
-                               self.dd, dk, bool(self.plot_features))
+                               self.dd, dk, bool(self.plot_features), verbosity=0)
 
         return dk
 
