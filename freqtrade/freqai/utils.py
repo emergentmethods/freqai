@@ -287,7 +287,6 @@ class PerformanceTracker:
             idx = np.where(self.historic_predictions['date_pred']
                            == accuracy['date_shift_accuracy'])[0]
             self.historic_predictions['accuracy_score'].iloc[idx] = accuracy['shift_accuracy']
-            self.historic_predictions['metric_calc_duration_ms'].iloc[idx] = t_end
             curr_acc = np.round(accuracy['balanced_accuracy'], 2)
             logger.debug(f'Current balanced accuracy: {curr_acc}')
             logger.debug(f"Accuracy metric computation took {t_end} ms.")
