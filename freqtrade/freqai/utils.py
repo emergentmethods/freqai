@@ -2,7 +2,7 @@ import copy
 import logging
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, Tuple
 
 import numpy as np
 import pandas as pd
@@ -196,6 +196,8 @@ def plot_feature_importance(model: Any, pair: str, dk: FreqaiDataKitchen,
         fig.update_layout(title_text=f"Best and worst features by importance {pair}")
         label = label.replace('&', '').replace('%', '')  # escape two FreqAI specific characters
         store_plot_file(fig, f"{dk.model_filename}-{label}.html", dk.data_path)
+
+        plot_pca_correlation(pair, dk)
 
 
 def record_params(config: Dict[str, Any], full_path: Path) -> None:
@@ -691,3 +693,168 @@ class PerformanceTracker:
         fig.update_layout(title_text=f"<b>Accuracy score for {self.pair}</b>")
 
         store_plot_file(fig, f"{self.dk.model_filename}_accuracy-score.html", self.dk.data_path)
+
+
+def plot_pca_correlation(pair: str, dk: FreqaiDataKitchen) -> None:
+    """
+    Plot the correlation matrix for the nmb_pcs=10 most and least important features
+    for the 5 first PCs.
+    :params:
+    :pair: coin pair
+    :dk: non-persistent data container for current coin/loop
+    """
+
+    if not dk.pca:
+        logger.info('No PCA model exists for generating correlation plots')
+        return
+    else:
+        from freqtrade.plot.plotting import make_subplots, store_plot_file
+
+        nmb_pcs = 10
+
+        correlation_matrix = get_pca_correlation(dk)
+        corr_idx = correlation_matrix.index.str.lstrip('%-')
+        explained_variance_ratios = dk.pca.explained_variance_ratio_[:nmb_pcs]
+
+        most_important_features, least_important_features = get_important_pca_features(dk)
+
+        most_important_features = list(most_important_features.feature_name[:nmb_pcs])
+        most_important_correls = correlation_matrix.filter(
+            most_important_features
+        ).iloc[:nmb_pcs]
+        column_labels = [
+            f'{corr_idx[i]}:\n{column_label}' for i, column_label in enumerate(
+                most_important_correls.columns.str.lstrip('%-')
+            )
+        ]
+        most_important_correls.columns = column_labels
+        most_important_correls = most_important_correls.iloc[::-1]
+
+        least_important_features = list(
+            least_important_features.feature_name[:nmb_pcs]
+        )
+        least_important_correls = correlation_matrix.filter(
+            least_important_features).iloc[:nmb_pcs]
+        column_labels = [
+            f'{corr_idx[i]}:\n{column_label}' for i, column_label in enumerate(
+                least_important_correls.columns.str.lstrip('%-')
+            )
+        ]
+        least_important_correls.columns = column_labels
+        least_important_correls = least_important_correls.iloc[::-1]
+
+        y_labels = []
+        for i in range(nmb_pcs):
+            y_labels.append(
+                f'{corr_idx[nmb_pcs-i-1]} '
+                f'({np.round(explained_variance_ratios[nmb_pcs-i-1]*100, 1)}%)'
+            )
+
+        fig = make_subplots(
+            rows=1, cols=2,
+            subplot_titles=('Most important features', 'Least important features')
+        )
+        add_plot(
+            fig=fig, dataframe=most_important_correls,
+            x_labels=most_important_correls.columns, y_labels=y_labels,
+            col=1, nmb_pcs=nmb_pcs,
+        )
+        add_plot(
+            fig=fig, dataframe=least_important_correls,
+            x_labels=least_important_correls.columns, y_labels=y_labels,
+            col=2, nmb_pcs=nmb_pcs,
+        )
+
+        for i in range(nmb_pcs):
+            fig.add_shape(
+                dict(
+                    type='rect', x0=(i - .5), y0=(nmb_pcs - 1.5 - i),
+                    x1=(i + .5), y1=(nmb_pcs - i - .5)
+                ),
+                line=dict(color='black', width=2),
+                row="all", col="all",
+            )
+
+        fig.update_layout(
+            title_text=f'Correlation coefficients'
+            f'\nfor the first {nmb_pcs} PCs '
+            f'({np.round(dk.pca.explained_variance_ratio_[:nmb_pcs].sum()*100,1)}% '
+            f'explained variance) and the corresponding most and least important features'
+        )
+
+        store_plot_file(
+            fig, f"{dk.model_filename}_correlation-PCA-TrainFeatures.html", dk.data_path)
+
+
+def add_plot(fig, dataframe, x_labels, y_labels, col, nmb_pcs) -> None:
+    from freqtrade.plot.plotting import go
+    fig.add_trace(
+        go.Heatmap(
+            z=dataframe.values, x=x_labels, y=y_labels,
+            text=dataframe.round(decimals=2).values,
+            texttemplate='%{text}', textfont={"size": 12},
+            hoverongaps=False, colorscale='RdBu', reversescale=True,
+            zmin=-1, zmax=1, zmid=0,
+        ),
+        row=1, col=col
+    )
+
+
+def get_pca_correlation(dk: FreqaiDataKitchen) -> pd.DataFrame:
+    """
+    Get the correlation matrix between principal components and the original features.
+    :returns:
+    :df_loadings: dataframe containing the component loadings (correlation coefficients)
+    for the features in the input dataframe
+    """
+    if not dk.pca:
+        logger.info('No PCA model exists')
+        return
+    else:
+        loadings = dk.pca.components_.T * np.sqrt(dk.pca.explained_variance_)
+        loadings = loadings.T
+        nmb_pcs = dk.pca.n_components_
+        pcs_list = [f'PC{str(i + 1)}' for i in range(nmb_pcs)]
+        df_loadings = pd.DataFrame.from_dict(dict(zip(pcs_list, loadings)))
+        df_loadings['Feature'] = dk.data['training_features_list_raw']
+        df_loadings = df_loadings.set_index('Feature')
+
+        return df_loadings.transpose()
+
+
+def get_important_pca_features(dk: FreqaiDataKitchen) -> Tuple:
+    """
+    Get the most and least important features for the principal components
+    after PCA transformation.
+    :returns:
+    :df_most_important: dataframe linking the names of the most inluencial original features
+    to the corresponding principal components
+    :df_least_important: dataframe linking the names of the least inluencial original features
+    to the corresponding principal components
+    """
+    if not dk.pca:
+        logger.info('No PCA model exists')
+        return None, None
+    else:
+        nmb_pcs = dk.pca.n_components_
+        feature_names = dk.data['training_features_list_raw']
+
+        most_important_pcs = [np.abs(dk.pca.components_[i]).argmax() for i in range(nmb_pcs)]
+        most_important_feature_names = [
+            feature_names[most_important_pcs[i]] for i in range(nmb_pcs)
+        ]
+        dic = {f'PC{str(i + 1)}': most_important_feature_names[i] for i in range(nmb_pcs)}
+        df_most_important = pd.DataFrame(
+            data=dic.items(), columns=['principal_component', 'feature_name']
+        )
+
+        least_important_pcs = [np.abs(dk.pca.components_[i]).argmin() for i in range(nmb_pcs)]
+        least_important_feature_names = [
+            feature_names[least_important_pcs[i]] for i in range(nmb_pcs)
+        ]
+        dic = {f'PC{str(i + 1)}': least_important_feature_names[i] for i in range(nmb_pcs)}
+        df_least_important = pd.DataFrame(
+            data=dic.items(), columns=['principal_component', 'feature_name']
+        )
+
+        return df_most_important, df_least_important
