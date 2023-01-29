@@ -272,6 +272,7 @@ class PerformanceTracker:
         num_candles = self.config["freqai"].get("fit_live_predictions_candles", 600)
 
         self.historic_predictions = self.dd.historic_predictions[self.pair].tail(num_candles)
+        self.historic_predictions.reset_index(inplace=True)
 
         df_pred_targ = self.create_pred_targ_df()
         self.historic_predictions[
@@ -283,12 +284,10 @@ class PerformanceTracker:
         t_end = np.round((datetime.now() - t_start).total_seconds() * 1000, 2)
 
         if bool(accuracy):
-            idx = np.where(self.historic_predictions['date_pred']
-                           == accuracy['date_balanced_accuracy'])[0]
-            self.historic_predictions['balanced_accuracy'].iloc[idx] = accuracy['balanced_accuracy']
-            idx = np.where(self.historic_predictions['date_pred']
-                           == accuracy['date_shift_accuracy'])[0]
-            self.historic_predictions['accuracy_score'].iloc[idx] = accuracy['shift_accuracy']
+            self.dd.historic_predictions[
+                'balanced_accuracy'].iloc[-1] = accuracy['balanced_accuracy']
+            self.dd.historic_predictions[
+                'accuracy_score'].iloc[-1] = accuracy['shift_accuracy']
             curr_acc = np.round(accuracy['balanced_accuracy'], 2)
             logger.debug(f'Current balanced accuracy: {curr_acc}')
             logger.debug(f"Accuracy metric computation took {t_end} ms.")
