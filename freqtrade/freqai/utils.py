@@ -284,9 +284,9 @@ class PerformanceTracker:
         t_end = np.round((datetime.now() - t_start).total_seconds() * 1000, 2)
 
         if bool(accuracy):
-            self.dd.historic_predictions[
+            self.dd.historic_predictions[self.pair][
                 'balanced_accuracy'].iloc[-1] = accuracy['balanced_accuracy']
-            self.dd.historic_predictions[
+            self.dd.historic_predictions[self.pair][
                 'accuracy_score'].iloc[-1] = accuracy['shift_accuracy']
             curr_acc = np.round(accuracy['balanced_accuracy'], 2)
             logger.debug(f'Current balanced accuracy: {curr_acc}')
