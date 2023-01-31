@@ -271,13 +271,14 @@ class PerformanceTracker:
             return
         num_candles = self.config["freqai"].get("fit_live_predictions_candles", 600)
 
-        self.historic_predictions = self.dd.historic_predictions[self.pair].tail(num_candles)
-        self.historic_predictions.reset_index(inplace=True)
-
+        self.historic_predictions = self.dd.historic_predictions[self.pair]
         df_pred_targ = self.create_pred_targ_df()
         self.historic_predictions[
             ['prediction_min', 'target_min', 'prediction_max', 'target_max']
         ] = df_pred_targ[['prediction_min', 'target_min', 'prediction_max', 'target_max']]
+
+        self.historic_predictions = self.historic_predictions.tail(num_candles)
+        self.historic_predictions.reset_index(inplace=True)
 
         t_start = datetime.now()
         accuracy = self.get_accuracy_metrics()
