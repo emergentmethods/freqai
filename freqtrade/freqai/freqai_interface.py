@@ -1,3 +1,4 @@
+import copy
 import inspect
 import logging
 import threading
@@ -6,6 +7,7 @@ from abc import ABC, abstractmethod
 from collections import deque
 from datetime import datetime, timezone
 from pathlib import Path
+from threading import Lock
 from typing import Any, Dict, List, Literal, Optional, Tuple
 
 import numpy as np
@@ -14,12 +16,14 @@ import psutil
 from numpy.typing import NDArray
 from pandas import DataFrame
 
+# from timer import timer
 from freqtrade.configuration import TimeRange
 from freqtrade.constants import Config
 from freqtrade.data.dataprovider import DataProvider
 from freqtrade.enums import RunMode
 from freqtrade.exceptions import OperationalException
 from freqtrade.exchange import timeframe_to_seconds
+from freqtrade.freqai.api_interface import FreqaiAPI
 from freqtrade.freqai.data_drawer import FreqaiDataDrawer
 from freqtrade.freqai.data_kitchen import FreqaiDataKitchen
 from freqtrade.freqai.utils import PerformanceTracker, plot_feature_importance, record_params
@@ -28,6 +32,7 @@ from freqtrade.strategy.interface import IStrategy
 
 pd.options.mode.chained_assignment = None
 logger = logging.getLogger(__name__)
+# timer.set_level(logging.INFO)
 
 
 class IFreqaiModel(ABC):
@@ -89,11 +94,19 @@ class IFreqaiModel(ABC):
         self.pair_it_train = 0
         self.total_pairs = len(self.config.get("exchange", {}).get("pair_whitelist"))
         self.train_queue = self._set_train_queue()
+        self.data_update_lock = Lock()
         self.inference_time: float = 0
         self.train_time: float = 0
         self.begin_time: float = 0
         self.begin_time_train: float = 0
         self.base_tf_seconds = timeframe_to_seconds(self.config['timeframe'])
+        self.add_santiment_data = self.freqai_info['feature_parameters'].get(
+            'include_santiment_data', False)
+
+        if self.freqai_info.get('freqai_api_url', None):
+            self.api_mode = self.freqai_info.get('freqai_api_mode', 'getter')
+            self.api = FreqaiAPI(config, self.dd, self.create_api_payload, self.api_mode)
+
         self.continual_learning = self.freqai_info.get('continual_learning', False)
         self.plot_features = self.ft_params.get("plot_feature_importances", 0)
         self.corr_dataframes: Dict[str, DataFrame] = {}
@@ -135,6 +148,7 @@ class IFreqaiModel(ABC):
         """
 
         self.live = strategy.dp.runmode in (RunMode.DRY_RUN, RunMode.LIVE)
+
         self.dd.set_pair_dict_info(metadata)
         self.data_provider = strategy.dp
         self.can_short = strategy.can_short
@@ -388,17 +402,11 @@ class IFreqaiModel(ABC):
         # get the model metadata associated with the current pair
         (_, trained_timestamp, return_null_array) = self.dd.get_pair_dict_info(metadata["pair"])
 
-        # if the metadata doesn't exist, the follower returns null arrays to strategy
-        if self.follow_mode and return_null_array:
-            logger.info("Returning null array from follower to strategy")
-            self.dd.return_null_values_to_strategy(dataframe, dk)
-            return dk
-
         # append the historic data once per round
         if self.dd.historic_data:
             self.dd.update_historic_data(strategy, dk)
+            self.update_external_data(dk)
             logger.debug(f'Updating historic data on pair {metadata["pair"]}')
-            self.track_current_candle()
 
         if not self.follow_mode:
 
@@ -410,6 +418,8 @@ class IFreqaiModel(ABC):
             # load candle history into memory if it is not yet.
             if not self.dd.historic_data:
                 self.dd.load_all_pair_histories(data_load_timerange, dk)
+                if self.add_santiment_data:
+                    self.api.download_external_data_from_santiment(dk, data_load_timerange)
 
             if not self.scanning:
                 self.scanning = True
@@ -429,6 +439,8 @@ class IFreqaiModel(ABC):
             strategy, prediction_dataframe=dataframe, pair=metadata["pair"],
             do_corr_pairs=self.get_corr_dataframes
         )
+        if self.add_santiment_data and not self.dd.historic_external_data.empty and self.model:
+            dataframe = self.attach_santiment_data_to_prediction_features(dataframe, dk)
 
         if not self.model:
             logger.warning(
@@ -623,15 +635,20 @@ class IFreqaiModel(ABC):
                                     new_trained_timerange does not contain any NaNs)
         """
 
-        corr_dataframes, base_dataframes = self.dd.get_base_and_corr_dataframes(
-            data_load_timerange, pair, dk
-        )
+        with self.data_update_lock:
+            corr_dataframes, base_dataframes = self.dd.get_base_and_corr_dataframes(
+                data_load_timerange, pair, dk
+            )
 
         unfiltered_dataframe = dk.use_strategy_to_populate_indicators(
             strategy, corr_dataframes, base_dataframes, pair
         )
 
         unfiltered_dataframe = dk.slice_dataframe(new_trained_timerange, unfiltered_dataframe)
+
+        if self.add_santiment_data:
+            unfiltered_dataframe = self.add_santiment_data_to_training_features(
+                new_trained_timerange, unfiltered_dataframe, dk)
 
         # find the features indicated by strategy and store in datakitchen
         dk.find_features(unfiltered_dataframe)
@@ -1010,3 +1027,133 @@ class IFreqaiModel(ABC):
         :do_predict: np.array of 1s and 0s to indicate places where freqai needed to remove
         data (NaNs) or felt uncertain about data (i.e. SVM and/or DI index)
         """
+
+    def create_api_payload(self, dataframe: DataFrame, pair: str) -> dict:
+        """
+        Create the payload (schema) for posting to user set API
+        """
+
+        payload: Dict[Any, Any] = {}
+
+        return payload
+
+    def fetch_predictions_for_getter(self, dataframe: DataFrame, metadata: dict):
+        # getter instance enters and exits here
+        if self.api_mode == 'getter':
+            dataframe = self.api.start_fetching_from_api(dataframe, metadata["pair"])
+            return dataframe
+        else:
+            logger.error('Strategy trying to get predictions from API, but not set to '
+                         'getter. Set freqai_api_mode to getter in config')
+
+    # @timer('function name', 's')
+    def post_predictions(self, dataframe: DataFrame, metadata: dict) -> None:
+
+        if self.live and self.api_mode == "poster":
+            self.api.post_predictions(dataframe, metadata["pair"])
+        else:
+            logger.error('Strategy trying to post predictions to DB, but not set to '
+                         'poster. Set freqai_api_mode to poster in config')
+
+    def update_external_data(self, dk: FreqaiDataKitchen):
+        """
+        Check santiment API and update external data dataframe.
+        """
+        size_hist = len(self.dd.historic_data[dk.pair][self.config['timeframe']])
+        size_hist_ext = len(self.dd.historic_external_data)
+        if size_hist < size_hist_ext and self.add_santiment_data:
+            logger.warning(
+                f'exchange data smaller than external data. '
+                f'external data = {size_hist_ext}, exchange data = {size_hist}')
+            return
+
+        if size_hist == size_hist_ext:
+            logger.info('Exchange data size equal to external data.')
+            return
+
+        if size_hist > size_hist_ext and self.add_santiment_data:
+            logger.info(
+                f'Exchange data bigger than external data. '
+                f'external data = {size_hist_ext}, exchange data = {size_hist}')
+            if size_hist - size_hist_ext > 2:
+                logger.warning(
+                    'Exchange data >2 rows more than external, '
+                    'this should only occur during the beginning.')
+            try:
+                self.api.download_external_data_from_santiment(dk)
+            except Exception as msg:
+                logger.warning(f'Something went wrong fetching external data with {msg}.')
+
+            if len(self.dd.historic_external_data) != size_hist:
+                logger.info(
+                    f'historic_external_data size mismatch. '
+                    f'external data = {size_hist_ext}, exchange data = {size_hist}')
+
+    def attach_santiment_data_to_prediction_features(self, df: DataFrame, dk: FreqaiDataKitchen):
+        """
+        Attaches the most receent santiment data to prediction features
+        before inferencing the model.
+        """
+        san_data = copy.deepcopy(self.dd.historic_external_data)
+        san_data.rename(columns={'datetime': 'date'}, inplace=True)
+        san_data = san_data.tail(len(df))
+        san_data = san_data.loc[:, san_data.columns != 'date']
+        shifts = self.freqai_info['feature_parameters']['include_shifted_candles']
+        san_data = self.api.shift_and_concatenate_df(san_data, shifts)
+        san_data.columns = [f'%%-{c}' for c in san_data]
+        san_data = san_data.filter(dk.training_features_list, axis=1)
+        san_data.set_index(df.index, inplace=True)
+        df = pd.concat([df, san_data], axis=1)
+
+        return df
+
+    def add_santiment_data_to_training_features(self, new_trained_timerange: TimeRange,
+                                                unfiltered_dataframe: DataFrame,
+                                                dk: FreqaiDataKitchen):
+        """
+        Attaches santiment data to the unfiltered training feature dataframe
+        before filtering/cleaning/trainnig.
+        """
+
+        first_date, last_date = dk.get_first_and_last_dates(unfiltered_dataframe)
+
+        san_data = copy.deepcopy(self.dd.historic_external_data)
+        san_data.rename(columns={'datetime': 'date'}, inplace=True)
+        san_data = dk.slice_dataframe(new_trained_timerange, san_data)
+        first_date, last_date = dk.get_first_and_last_dates(unfiltered_dataframe)
+        first_date_ext, last_date_ext = dk.get_first_and_last_dates(san_data)
+
+        # ensure all dateranges are equivalent in length
+        latest_first = first_date if first_date > first_date_ext else first_date_ext
+        earliest_last = last_date if last_date < last_date_ext else last_date_ext
+
+        if last_date_ext < last_date:
+            logger.warning(
+                'External data not updated as much as exchange data, '
+                'training on fewer data points than desired')
+
+        # match both dataframes
+        unfiltered_dataframe = unfiltered_dataframe.loc[unfiltered_dataframe["date"] <=
+                                                        earliest_last, :]
+        unfiltered_dataframe = unfiltered_dataframe.loc[unfiltered_dataframe["date"] >=
+                                                        latest_first, :]
+        san_data = san_data.loc[san_data["date"] <= earliest_last, :]
+        san_data = san_data.loc[san_data["date"] >= latest_first, :]
+
+        if len(unfiltered_dataframe) != len(san_data):
+            raise OperationalException(
+                'Exchange and external dataframes containing unequal data counts')
+
+        # remove date from san_data
+        san_data = san_data.loc[:, san_data.columns != 'date']
+        # shift the features
+        shifts = self.freqai_info['feature_parameters']['include_shifted_candles']
+        san_data = self.api.shift_and_concatenate_df(san_data, shifts)
+
+        san_data.columns = [f'%%-{c}' for c in san_data]
+        san_data.set_index(unfiltered_dataframe.index, inplace=True)
+
+        # add external data to the training features
+        unfiltered_dataframe = pd.concat([unfiltered_dataframe, san_data], axis=1)
+
+        return unfiltered_dataframe

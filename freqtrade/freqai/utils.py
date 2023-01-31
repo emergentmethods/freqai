@@ -144,7 +144,7 @@ def get_required_data_timerange(config: Config) -> TimeRange:
 
 
 def plot_feature_importance(model: Any, pair: str, dk: FreqaiDataKitchen,
-                            count_max: int = 25) -> None:
+                            count_max: int = 200) -> None:
     """
         Plot Best and worst features by importance for a single sub-train.
         :param model: Any = A model which was `fit` using a common library
@@ -156,6 +156,7 @@ def plot_feature_importance(model: Any, pair: str, dk: FreqaiDataKitchen,
     from freqtrade.plot.plotting import go, make_subplots, store_plot_file
 
     # Extract feature importance from model
+    logger.info(f'About to plot {pair}')
     models = {}
     if 'FreqaiMultiOutputRegressor' in str(model.__class__):
         for estimator, label in zip(model.estimators_, dk.label_list):

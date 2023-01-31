@@ -1468,6 +1468,15 @@ class FreqaiDataKitchen:
             for label in self.unique_classes:
                 self.unique_class_list += list(self.unique_classes[label])
 
+    def get_first_and_last_dates(self,
+                                 dataframe: DataFrame) -> Tuple[datetime,
+                                                                datetime]:
+
+        first_date = dataframe['date'].iloc[0]
+        last_date = dataframe['date'].iloc[-1]
+
+        return first_date, last_date
+
     def save_backtesting_prediction(
         self, append_df: DataFrame
     ) -> None:

@@ -143,6 +143,9 @@ class FreqaiDataDrawer:
                 return metatada_dict
         return {}
 
+        self.historic_external_data: DataFrame = pd.DataFrame()
+        self.metric_update_tracker: Dict[str, Dict[str, Any]] = {}
+
     def load_drawer_from_disk(self):
         """
         Locate and load a previously saved data drawer full of all pair model metadata in

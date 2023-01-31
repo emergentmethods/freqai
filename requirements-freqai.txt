@@ -9,3 +9,4 @@ catboost==1.1.1; platform_machine != 'aarch64'
 lightgbm==3.3.4
 xgboost==1.7.3
 tensorboard==2.11.2
+sanpy==0.11.4
