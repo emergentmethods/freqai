@@ -259,8 +259,8 @@ class IFreqaiModel(ABC):
                         new_trained_timerange, pair, strategy, dk, data_load_timerange
                     )
                 except Exception as msg:
-                    logger.warning(f"Training {pair} raised exception {msg.__class__.__name__}. "
-                                   f"Message: {msg}, skipping.")
+                    logger.exception(f"Training {pair} raised exception {msg.__class__.__name__}. "
+                                     f"Message: {msg}, skipping.")
 
                 self.train_timer('stop', pair)
 
@@ -407,6 +407,7 @@ class IFreqaiModel(ABC):
             self.dd.update_historic_data(strategy, dk)
             self.update_external_data(dk)
             logger.debug(f'Updating historic data on pair {metadata["pair"]}')
+            self.track_current_candle()
 
         if not self.follow_mode:
 
@@ -439,8 +440,6 @@ class IFreqaiModel(ABC):
             strategy, prediction_dataframe=dataframe, pair=metadata["pair"],
             do_corr_pairs=self.get_corr_dataframes
         )
-        if self.add_santiment_data and not self.dd.historic_external_data.empty and self.model:
-            dataframe = self.attach_santiment_data_to_prediction_features(dataframe, dk)
 
         if not self.model:
             logger.warning(
@@ -451,6 +450,9 @@ class IFreqaiModel(ABC):
 
         if self.corr_pairlist:
             dataframe = self.cache_corr_pairlist_dfs(dataframe, dk)
+
+        if self.add_santiment_data and not self.dd.historic_external_data.empty and self.model:
+            dataframe = self.attach_santiment_data_to_prediction_features(dataframe, dk)
 
         dk.find_labels(dataframe)
 
@@ -1037,23 +1039,23 @@ class IFreqaiModel(ABC):
 
         return payload
 
-    def fetch_predictions_for_getter(self, dataframe: DataFrame, metadata: dict):
-        # getter instance enters and exits here
-        if self.api_mode == 'getter':
-            dataframe = self.api.start_fetching_from_api(dataframe, metadata["pair"])
-            return dataframe
-        else:
-            logger.error('Strategy trying to get predictions from API, but not set to '
-                         'getter. Set freqai_api_mode to getter in config')
+    # def fetch_predictions_for_getter(self, dataframe: DataFrame, metadata: dict):
+    #     # getter instance enters and exits here
+    #     if self.api_mode == 'getter':
+    #         dataframe = self.api.start_fetching_from_api(dataframe, metadata["pair"])
+    #         return dataframe
+    #     else:
+    #         logger.error('Strategy trying to get predictions from API, but not set to '
+    #                      'getter. Set freqai_api_mode to getter in config')
 
     # @timer('function name', 's')
-    def post_predictions(self, dataframe: DataFrame, metadata: dict) -> None:
+    # def post_predictions(self, dataframe: DataFrame, metadata: dict) -> None:
 
-        if self.live and self.api_mode == "poster":
-            self.api.post_predictions(dataframe, metadata["pair"])
-        else:
-            logger.error('Strategy trying to post predictions to DB, but not set to '
-                         'poster. Set freqai_api_mode to poster in config')
+    #     if self.live and self.api_mode == "poster":
+    #         self.api.post_predictions(dataframe, metadata["pair"])
+    #     else:
+    #         logger.error('Strategy trying to post predictions to DB, but not set to '
+    #                      'poster. Set freqai_api_mode to poster in config')
 
     def update_external_data(self, dk: FreqaiDataKitchen):
         """
@@ -1082,7 +1084,7 @@ class IFreqaiModel(ABC):
             try:
                 self.api.download_external_data_from_santiment(dk)
             except Exception as msg:
-                logger.warning(f'Something went wrong fetching external data with {msg}.')
+                logger.exception(f'Something went wrong fetching external data with {msg}.')
 
             if len(self.dd.historic_external_data) != size_hist:
                 logger.info(
@@ -1095,15 +1097,23 @@ class IFreqaiModel(ABC):
         before inferencing the model.
         """
         san_data = copy.deepcopy(self.dd.historic_external_data)
+        last_internal_date = df.iloc[-1]["date"]
+        first_internal_date = df.iloc[0]["date"]
         san_data.rename(columns={'datetime': 'date'}, inplace=True)
-        san_data = san_data.tail(len(df))
-        san_data = san_data.loc[:, san_data.columns != 'date']
+        # num_candles = len(df)
+        san_data = san_data.loc[san_data["date"] <= last_internal_date, :]
+        san_data = san_data.loc[san_data["date"] >= first_internal_date, :]
+        # san_data = san_data.tail(len(df))
+        san_data_nodate = san_data.loc[:, san_data.columns != 'date']
         shifts = self.freqai_info['feature_parameters']['include_shifted_candles']
-        san_data = self.api.shift_and_concatenate_df(san_data, shifts)
-        san_data.columns = [f'%%-{c}' for c in san_data]
-        san_data = san_data.filter(dk.training_features_list, axis=1)
-        san_data.set_index(df.index, inplace=True)
-        df = pd.concat([df, san_data], axis=1)
+        san_data_nodate = self.api.shift_and_concatenate_df(san_data_nodate, shifts)
+        san_data_nodate.columns = [f'%%-{c}' for c in san_data_nodate]
+        san_data_nodate = san_data_nodate.filter(dk.training_features_list, axis=1)
+        san_data_nodate["date"] = san_data["date"]
+        # san_data.set_index(df.index, inplace=True)
+        df = pd.merge(df, san_data_nodate, how='left', on='date')  # .ffill()
+        # df = pd.concat([df, san_data], axis=1)
+        # df = df[df["date"] <= last_internal_date, :]
 
         return df
 

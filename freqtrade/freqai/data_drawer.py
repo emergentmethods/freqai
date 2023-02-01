@@ -102,6 +102,8 @@ class FreqaiDataDrawer:
                 "model_filename": "", "trained_timestamp": 0,
                 "data_path": "", "extras": {}}
         self.model_type = self.freqai_info.get('model_save_type', 'joblib')
+        self.historic_external_data: DataFrame = pd.DataFrame()
+        self.metric_update_tracker: Dict[str, Dict[str, Any]] = {}
 
     def update_metric_tracker(self, metric: str, value: float, pair: str) -> None:
         """
@@ -142,9 +144,6 @@ class FreqaiDataDrawer:
                 metatada_dict = rapidjson.load(fp, number_mode=rapidjson.NM_NATIVE)
                 return metatada_dict
         return {}
-
-        self.historic_external_data: DataFrame = pd.DataFrame()
-        self.metric_update_tracker: Dict[str, Dict[str, Any]] = {}
 
     def load_drawer_from_disk(self):
         """

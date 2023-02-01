@@ -198,7 +198,8 @@ def plot_feature_importance(model: Any, pair: str, dk: FreqaiDataKitchen,
         label = label.replace('&', '').replace('%', '')  # escape two FreqAI specific characters
         store_plot_file(fig, f"{dk.model_filename}-{label}.html", dk.data_path)
 
-        plot_pca_correlation(pair, dk)
+        if dk.freqai_config["feature_parameters"]["principal_component_analysis"]:
+            plot_pca_correlation(pair, dk)
 
 
 def record_params(config: Dict[str, Any], full_path: Path) -> None:

@@ -7,14 +7,15 @@ from typing import Any, Callable, Dict
 import dateutil.parser
 import numpy as np
 import pandas as pd
-import requests
+# import requests
 import san
 from pandas import DataFrame
 from san import AsyncBatch
 from san.graphql import execute_gql
+import contextlib
 
 from freqtrade.configuration import TimeRange
-from freqtrade.exceptions import OperationalException
+# from freqtrade.exceptions import OperationalException
 from freqtrade.exchange import timeframe_to_seconds
 from freqtrade.freqai.data_drawer import FreqaiDataDrawer
 from freqtrade.freqai.data_kitchen import FreqaiDataKitchen
@@ -62,169 +63,6 @@ class FreqaiAPI:
         self.moving_avg_window = self.freqai_config.get(
             'santiment_config', {}).get('moving_average_window', 5)
 
-    def start_fetching_from_api(self, dataframe: DataFrame, pair: str) -> DataFrame:
-
-        fetch_new = self.check_if_new_fetch_required(dataframe, pair)
-        if fetch_new:
-            response = self.fetch_all_pairs_from_api(dataframe)
-            if not response:
-                self.create_null_api_dict(pair)
-            else:
-                self.parse_response(response)
-        self.make_return_dataframe(dataframe, pair)
-        return self.dd.attach_return_values_to_return_dataframe(pair, dataframe)
-
-    def post_predictions(self, dataframe: DataFrame, pair: str) -> None:
-        """
-        FreqAI "poster" instance will call this function to post predictions
-        to an API. API schema is user defined in the IFreqaiModel.create_api_payload().
-        API schema is flexible but must follow standardized method where
-        f"{self.post_url}/{pair}" retrieves the predictions for current candle of
-        the specified pair. Additionally, the schema must contain "returns"
-        which defines the return strings expected by the getter.
-        """
-        subpair = pair.split('/')
-        pair = f"{subpair[0]}{subpair[1]}"
-
-        get_url = f"{self.post_url}/{pair}"
-
-        payload = self.create_api_payload(dataframe, pair)
-
-        if self.num_posts < len(self.config['exchange']['pair_whitelist']):
-            response = requests.request("GET", get_url, headers=self.headers)
-            self.num_posts += 1
-            if response.json()['data'] is None:
-                requests.request("POST", self.post_url, json=payload, headers=self.headers)
-            else:
-                requests.request("PATCH", get_url, json=payload, headers=self.headers)
-        else:
-            requests.request("PATCH", get_url, json=payload, headers=self.headers)
-
-    def check_if_new_fetch_required(self, dataframe: DataFrame, pair: str) -> bool:
-
-        if not self.api_dict:
-            return True
-
-        subpair = pair.split('/')
-        coin = f"{subpair[0]}{subpair[1]}"
-        candle_date = dataframe['date'].iloc[-1]
-        ts_candle = candle_date.timestamp()
-        ts_dict = dateutil.parser.parse(self.api_dict[coin]['updatedAt']).timestamp()
-
-        if ts_dict < ts_candle:
-            logger.info('Local dictionary outdated, fetching new predictions from API')
-            return True
-        else:
-            return False
-
-    def fetch_all_pairs_from_api(self, dataframe: DataFrame) -> dict:
-
-        candle_date = dataframe['date'].iloc[-1]
-        get_url = f"{self.post_url}"
-        n_tries = 0
-        ts_candle = candle_date.timestamp()
-        ts_pair = ts_candle - 1
-        ts_pair_oldest = int(ts_candle)
-
-        while 1:
-            response = requests.request("GET", get_url, headers=self.headers).json()['data']
-            for pair in response:
-                ts_pair = dateutil.parser.parse(pair['updatedAt']).timestamp()
-                if ts_pair < ts_pair_oldest:
-                    ts_pair_oldest = ts_pair
-                    outdated_pair = pair['name']
-            if ts_pair_oldest < ts_candle:
-                logger.warning(
-                    f'{outdated_pair} is not uptodate, waiting on API db to update before'
-                    ' retrying.')
-                n_tries += 1
-                if n_tries > 5:
-                    logger.warning(
-                        'Tried to fetch updated DB 5 times with no success. Returning null values'
-                        ' back to strategy')
-                    return {}
-                time.sleep(5)
-            else:
-                logger.info('Successfully fetched updated DB')
-                break
-
-        return response
-
-    def parse_response(self, response_dict: dict) -> None:
-
-        for coin_pred in response_dict:
-            coin = coin_pred['name']
-            self.api_dict[coin] = coin_pred   # {}
-            # for return_str in coin_pred['returns']:
-            #     coin_dict[coin][return_str] = coin_pred[return_str]
-
-    def make_return_dataframe(self, dataframe: DataFrame, pair: str) -> None:
-
-        subpair = pair.split('/')
-        coin = f"{subpair[0]}{subpair[1]}"
-
-        if coin not in self.api_dict:
-            raise OperationalException(
-                'Getter is looking for a coin that is not available at this API. '
-                'Ensure whitelist only contains available coins.')
-
-        if pair not in self.dd.model_return_values:
-            self.set_initial_return_values(pair, self.api_dict[coin], len(dataframe.index))
-        else:
-            self.append_model_predictions_from_api(pair, self.api_dict[coin], len(dataframe.index))
-
-    def set_initial_return_values(self, pair: str, response_dict: dict, len_df: int) -> None:
-        """
-        Set the initial return values to a persistent dataframe so that the getter only needs
-        to retrieve a single data point per candle.
-        """
-        mrv_df = self.dd.model_return_values[pair] = DataFrame()
-
-        for expected_str in response_dict['returns']:
-            return_str = expected_str['name']
-            mrv_df[return_str] = np.ones(len_df) * response_dict[return_str]
-
-    def append_model_predictions_from_api(self, pair: str,
-                                          response_dict: dict, len_df: int) -> None:
-        """
-        Function to append the api retrieved predictions to the return dataframe, but
-        also detects if return dataframe should change size. This enables historical
-        predictions to be viewable in FreqUI.
-        """
-
-        length_difference = len(self.dd.model_return_values[pair]) - len_df
-        i = 0
-
-        if length_difference == 0:
-            i = 1
-        elif length_difference > 0:
-            i = length_difference + 1
-
-        mrv_df = self.dd.model_return_values[pair] = self.dd.model_return_values[pair].shift(-i)
-
-        for expected_str in response_dict['returns']:
-            return_str = expected_str['name']
-            mrv_df[return_str].iloc[-1] = response_dict[return_str]
-
-        if length_difference < 0:
-            prepend_df = pd.DataFrame(
-                np.zeros((abs(length_difference) - 1, len(mrv_df.columns))), columns=mrv_df.columns
-            )
-            mrv_df = pd.concat([prepend_df, mrv_df], axis=0)
-
-    def create_null_api_dict(self, pair: str) -> None:
-        """
-        Set values in api_dict to 0 and return to user. This is only used in case the API is
-        unresponsive, but  we still want FreqAI to return to the strategy to continue handling
-        open trades.
-        """
-        subpair = pair.split('/')
-        pair = f"{subpair[0]}{subpair[1]}"
-
-        for expected_str in self.api_dict[pair]['returns']:
-            return_str = expected_str['name']
-            self.api_dict[pair][return_str] = 0
-
     # SANTIMENT API INTERFACE
     def graphql_timeseries(self, metric, slug, start, stop, interval):
         execute_str = ('{'
@@ -242,9 +80,7 @@ class FreqaiAPI:
     def create_metric_update_tracker(self) -> list:
 
         metrics_to_get = self.freqai_config['santiment_config']['metrics']
-        # ["daily_active_addresses", "transaction_volume",
-        #                   "active_withdrawals_5m", 'active_addresses_1h']
-        slugs = self.freqai_config['santiment_config']['slugs']  # ['bitcoin', 'ethereum']
+        slugs = self.freqai_config['santiment_config']['slugs']
         metric_slug = []
 
         for metric in metrics_to_get:
@@ -284,7 +120,6 @@ class FreqaiAPI:
             return None
         else:
             logger.info(f'Trying to pulling new value for {metric}/{slug}')
-            # self.dd.metric_update_tracker[f'{metric}/{slug}']['datetime'] = to_update_dt
             self.metric_slug_temporary.append(f'{metric}/{slug}')
             return updated_dt
 
@@ -339,11 +174,17 @@ class FreqaiAPI:
                 return True
 
         minInt_sec = timeframe_to_seconds(meta_dict['minInterval'])
+        stratInt_sec = timeframe_to_seconds(self.config["timeframe"])
         maxInt = self.freqai_config['santiment_config']['maxInt']
         maxInt_sec = timeframe_to_seconds(self.freqai_config['santiment_config']['maxInt'])
         if minInt_sec > maxInt_sec:
             logger.warning(f'Removed {metric}/{slug} since its minimum interval was greater'
                            f' than user requested {meta_dict["minInterval"]} > {maxInt}')
+            self.metric_slug_final.remove(f'{metric}/{slug}')
+            return True
+        if minInt_sec < stratInt_sec:
+            logger.warning(f'Removed {metric}/{slug} since its minimum interval was less'
+                           f' than  than strat tf. {minInt_sec} < {stratInt_sec}')
             self.metric_slug_final.remove(f'{metric}/{slug}')
             return True
 
@@ -367,13 +208,49 @@ class FreqaiAPI:
         else:
             metric_slug = self.metric_slug_final
             self.metric_slug_temporary = []
+            start = None
+            # stop = self.dd.current_candle
             stop = datetime.now(timezone.utc)
 
         san.ApiConfig.api_key = self.santiment_api_key
 
         batch = AsyncBatch()
 
-        # build batch to send to sanpi
+        get_many_dict = self.build_get_many_dict(metric_slug, build_historic_df, start, stop)
+
+        for metric in get_many_dict.keys():
+            slug1 = get_many_dict[metric]["slugs"][0]
+            start = datetime.fromtimestamp(get_many_dict[metric]["start"], tz=timezone.utc)
+            batch.get_many(
+                metric,
+                slugs=get_many_dict[metric]["slugs"],
+                from_date=start,
+                to_date=stop,
+                # transform={"type": "moving_average",
+                #            "moving_average_base": self.moving_avg_window},
+                interval=self.dd.metric_update_tracker[f'{metric}/{slug1}']['minInterval']
+
+            )
+
+        if batch.queries:
+            with contextlib.redirect_stdout(None):
+                response = batch.execute()
+        else:
+            logger.info('Nothing to fetch externally, ffilling dataframe')
+            self.ffill_historic_values()
+            return
+
+        if build_historic_df:
+            self.build_historic_external_data(response, get_many_dict)
+        else:
+            self.append_new_row_to_historic_external_data(response, get_many_dict)
+
+        end = time.time()
+        logger.info(f'Total time spent fetching Santiment data {end-begin:.2f} seconds')
+
+    def build_get_many_dict(self, metric_slug, build_historic_df, start, stop):
+        # build dict for metric: [slugs] to feed to sanpy get_many
+        get_many_dict = {}
         for key in metric_slug:
             slug = key.split('/')[1]
             metric = key.split('/')[0]
@@ -388,62 +265,51 @@ class FreqaiAPI:
                 if not start:
                     continue
 
-            batch.get(
-                f'{metric}/{slug}',
-                from_date=start,
-                to_date=stop,
-                # transform={"type": "moving_average",
-                #            "moving_average_base": self.moving_avg_window},
-                interval=self.dd.metric_update_tracker[f'{metric}/{slug}']['minInterval']
-            )
+            if metric not in get_many_dict.keys():
+                get_many_dict[metric] = {"slugs": [slug], "start": start.timestamp()}
+            else:
+                get_many_dict[metric]["slugs"].append(slug)
+                if start.timestamp() < get_many_dict[metric]["start"]:
+                    # get data from earliest needed time on a metric (Across slugs)
+                    get_many_dict[metric]["start"] = start.timestamp()
 
-        if batch.queries:
-            response = batch.execute()
-        else:
-            logger.info('Nothing to fetch externally, ffilling dataframe')
-            self.ffill_historic_values()
-            return
+        return get_many_dict
 
-        if build_historic_df:
-            self.build_historic_external_data(response, dk)
-        else:
-            self.append_new_row_to_historic_external_data(response, dk)
-
-        end = time.time()
-        logger.info(f'Total time spent fetching Santiment data {end-begin:.2f} seconds')
-
-    def build_historic_external_data(self, response: dict, dk: FreqaiDataKitchen):
+    def build_historic_external_data(self, response: dict, get_many_dict):
         """
         Build the persistent historic_external_data dataframe using user defined
         training duration.
         """
-        logger.info(f'External successfully fetching metrics for {self.metric_slug_final}')
-        metric_dict = dict(zip(self.metric_slug_final, response))
+        logger.info(f'External successfully fetching metrics for {get_many_dict.keys()}')
+        metric_dict = dict(zip(get_many_dict.keys(), response))
+        # metric_dict = dict(zip(self.metric_slug_final, response))
         to_remove = []
-        for metric in self.metric_slug_final:
-            metric_dict[metric].rename(columns={'value': metric}, inplace=True)
-            # minInterval = self.dd.metric_update_tracker[metric]['minInterval']
-            # metric_dict[metric].index = (metric_dict[metric].index +
-            #               timedelta(seconds=timeframe_to_seconds(minInterval)))
-            if (metric_dict[metric][metric] == 0.0).all():
-                logger.info(f'{metric} is all zeros, removing it from metric '
-                            'list and never fetching again.')
-                to_remove.append(metric)
-                continue
-            dt = datetime.fromtimestamp(
-                int(metric_dict[metric].iloc[-1].name.timestamp()), timezone.utc)
-            self.dd.metric_update_tracker[f'{metric}']['datetime_updated'] = dt
-            # Santiment stores their data at beginning of candle that contained the data.
-            # Everyone else stores it at end (As they should) so we fix santiment data for them.
+        for metric in get_many_dict.keys():
+            # metric_dict[metric].rename(columns={'value': metric}, inplace=True)
+            for slug in metric_dict[metric].columns:
+                metric_slug = f"{metric}/{slug}"
+                metric_dict[metric].rename(columns={f"{slug}": metric_slug}, inplace=True)
+                if (metric_dict[metric][metric_slug] == 0.0).all():
+                    logger.info(f'{metric_slug} is all zeros, removing it from metric '
+                                'list and never fetching again.')
+                    to_remove.append(metric_slug)
+                    continue
+                dt = datetime.fromtimestamp(
+                    int(metric_dict[metric].iloc[-1].name.timestamp()), timezone.utc)
+                self.dd.metric_update_tracker[f'{metric_slug}']['datetime_updated'] = dt
+                # Santiment stores their data at beginning of candle that contained the data.
+                # Everyone else stores it at end (As they should) so we fix santiment data for them.
 
-            self.dd.historic_external_data = pd.merge(
-                self.dd.historic_external_data, metric_dict[metric],
-                how='left', on='datetime'
-                ).ffill()
+                self.dd.historic_external_data = pd.merge(
+                    self.dd.historic_external_data,
+                    metric_dict[metric][metric_slug],
+                    how='left',
+                    on='datetime'
+                    ).ffill()
         for item in to_remove:
             self.metric_slug_final.remove(item)
 
-    def append_new_row_to_historic_external_data(self, response, dk):
+    def append_new_row_to_historic_external_data(self, response, get_many_dict):
         """
         Append new row to the historic_external_data dataframe. This
         function checks the response from santiment if there was new data
@@ -454,37 +320,45 @@ class FreqaiAPI:
         of the bucket). But it should be ensured that this minInterval is properly
         handled across all metrics.
         """
-        metric_dict = dict(zip(self.metric_slug_temporary, response))
+        # metric_dict = dict(zip(self.metric_slug_temporary, response))
+        metric_dict = dict(zip(get_many_dict.keys(), response))
         hist_df = self.dd.historic_external_data
         metric_df = pd.DataFrame(np.nan, index=hist_df.index[-1:], columns=hist_df.columns)
         hist_df = pd.concat([hist_df, metric_df], ignore_index=True, axis=0)
 
-        for metric in self.metric_slug_temporary:
+        # for metric in self.metric_slug_temporary:
+        for metric in get_many_dict.keys():
+            # metric_dict[metric].rename(columns={'value': metric}, inplace=True)
+            for slug in metric_dict[metric].columns:
+                metric_slug = f"{metric}/{slug}"
+                metric_dict[metric].rename(columns={f"{slug}": metric_slug}, inplace=True)
 
-            if metric_dict[metric].empty:
-                logger.info(f'Unable to pull new data for {metric}, ffilling')
-                continue
-            dt = datetime.fromtimestamp(
-                int(metric_dict[metric].iloc[-1].name.timestamp()), timezone.utc)
+                if metric_dict[metric][metric_slug].empty:
+                    logger.info(f'Unable to pull new data for {metric}, ffilling')
+                    continue
+                dt = datetime.fromtimestamp(
+                    int(metric_dict[metric].iloc[-1].name.timestamp()), timezone.utc)
 
-            # santiment stores data at beginning of candle where it was computed.
-            # minInterval = self.dd.metric_update_tracker[metric]['minInterval']
-            # dt += timedelta(seconds=timeframe_to_seconds(minInterval))
+                # santiment stores data at beginning of candle where it was computed.
+                # minInterval = self.dd.metric_update_tracker[metric]['minInterval']
+                # dt += timedelta(seconds=timeframe_to_seconds(minInterval))
 
-            if dt == self.dd.metric_update_tracker[f'{metric}']['datetime_updated']:
-                logger.info(
-                    f'no new data available for {metric} from santiment, waiting since {dt}')
-                continue
+                if dt == self.dd.metric_update_tracker[f'{metric_slug}']['datetime_updated']:
+                    logger.info(
+                        f"no new data available for {metric_slug} from santiment, "
+                        f"waiting since {dt}")
+                    continue
 
-            metric_dict[metric].rename(columns={'value': metric}, inplace=True)
+                # metric_dict[metric].rename(columns={'value': metric}, inplace=True)
 
-            self.dd.metric_update_tracker[f'{metric}']['datetime_updated'] = dt
-            self.dd.metric_update_tracker[f'{metric}']['datetime_grabbed'] = datetime.now(
-                tz=timezone.utc)
+                self.dd.metric_update_tracker[f'{metric_slug}']['datetime_updated'] = dt
+                self.dd.metric_update_tracker[f'{metric_slug}']['datetime_grabbed'] = datetime.now(
+                    tz=timezone.utc)
 
-            idx = hist_df[hist_df['datetime'] >= dt].index
-            hist_df[metric].iloc[idx] = metric_dict[metric].iloc[-1]
-            logger.info(f'Successfully pulled new data for {metric}')
+                idx = hist_df[hist_df['datetime'] >= dt].index
+                hist_df[metric_slug].iloc[idx] = metric_dict[metric][metric_slug].iloc[-1]
+                logger.info(f'Successfully pulled new data for {metric_slug}')
+
         hist_df['datetime'].iloc[-1] = hist_df['datetime'].iloc[-2] + timedelta(
             seconds=timeframe_to_seconds(self.config['timeframe']))
         hist_df.fillna(method='ffill', inplace=True)

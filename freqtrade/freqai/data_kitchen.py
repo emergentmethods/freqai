@@ -263,9 +263,10 @@ class FreqaiDataKitchen:
             self.do_predict = np.array(drop_index.replace(True, 1).replace(False, 0))
             if (len(self.do_predict) - self.do_predict.sum()) > 0:
                 logger.info(
-                    "dropped %s of %s prediction data points due to NaNs.",
+                    "dropped %s of %s prediction data points due to NaNs for %s.",
                     len(self.do_predict) - self.do_predict.sum(),
                     len(filtered_df),
+                    self.pair
                 )
             labels = []
 
