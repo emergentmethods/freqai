@@ -77,6 +77,16 @@ class FreqaiAPI:
 
         return execute_gql(execute_str)
 
+    # def batched_metric_execute(self, metrics, slugs)
+    #     mutation {
+    #     sql: computeRawClickhouseQuery(query: "SELECT dt, get_asset_name(asset_id) AS slug, get_metric_name(metric_id) AS metric, value\nFROM intraday_metrics\nWHERE \n    dt >= now() - interval 24 HOUR\n    AND asset_id IN (SELECT asset_id FROM asset_metadata WHERE name in ('bitcoin', 'ethereum', 'maker', 'uniswap'))\n    AND metric_id IN (SELECT metric_id FROM metric_metadata WHERE name in ('active_addresses_24h', 'transaction_volume', 'price_usd', 'volume_usd'))",
+    #     parameters: "{}") {
+    #         headers: columns
+    #         rows
+    #         types: columnTypes
+    #     }
+    #     }
+
     def create_metric_update_tracker(self) -> list:
 
         metrics_to_get = self.freqai_config['santiment_config']['metrics']
@@ -233,16 +243,20 @@ class FreqaiAPI:
             )
 
         if batch.queries:
-            with contextlib.redirect_stdout(None):
+            try:
                 response = batch.execute()
+            except Exception as e:
+                response = None
+                logger.exception(f"Santiment api fetch encountered error {e}")
+
         else:
             logger.info('Nothing to fetch externally, ffilling dataframe')
             self.ffill_historic_values()
             return
 
-        if build_historic_df:
+        if build_historic_df and response is not None:
             self.build_historic_external_data(response, get_many_dict)
-        else:
+        elif response is not None:
             self.append_new_row_to_historic_external_data(response, get_many_dict)
 
         end = time.time()
