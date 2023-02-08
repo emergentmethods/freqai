@@ -80,7 +80,7 @@ docker-build-dependecies:
     - docker:dind
   before_script: [] # Ignore global before_script
   script:
-    - docker build "$CI_REGISTRY_IMAGE/depencency" Dockerfile.deps
+    - docker build -t "$CI_REGISTRY_IMAGE/depencency" Dockerfile.deps
     - docker login -u "$CI_REGISTRY_USER" -p "$CI_REGISTRY_PASSWORD" $CI_REGISTRY
     - docker push "$CI_REGISTRY_IMAGE/dependency" --all-tags
   when: manual
