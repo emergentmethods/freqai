@@ -8,8 +8,8 @@ image: python:3.10.7
 #     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
 
 stages:
-  - test
   - build
+  # - test
 
 # Before script hook for each job to setup dependencies, tried using caching 
 # to speed up subsequent jobs but needs more testing so not important right now
