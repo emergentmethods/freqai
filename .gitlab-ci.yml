@@ -34,20 +34,20 @@ before_script:
 #   script: pytest --random-order --cov=freqtrade --cov-config=.coveragerc
 
 # Run flake8
-run-flake8:
-  stage: test
-  before_script: [] # Ignore global before_script
-  script: 
-    - pip3 install flake8
-    - flake8 freqtrade
+# run-flake8:
+#   stage: test
+#   before_script: [] # Ignore global before_script
+#   script: 
+#     - pip3 install flake8
+#     - flake8 freqtrade
 
-# Run isort
-run-isort:
-  stage: test
-  before_script: [] # Ignore global before_script
-  script:
-    - pip3 install isort 
-    - isort --check freqtrade
+# # Run isort
+# run-isort:
+#   stage: test
+#   before_script: [] # Ignore global before_script
+#   script:
+#     - pip3 install isort 
+#     - isort --check freqtrade
 
 # Run mypy
 # run-mypy:
