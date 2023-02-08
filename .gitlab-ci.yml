@@ -72,15 +72,15 @@ docker-build:
     - docker push "$CI_REGISTRY_IMAGE" --all-tags
 
 
-# Build the docker image and push to the gitlab container registry
-docker-build-dependecies:
-  stage: build
-  image: docker:latest
-  services:
-    - docker:dind
-  before_script: [] # Ignore global before_script
-  script:
-    - docker build -t "$CI_REGISTRY_IMAGE/depencency" Dockerfile.deps
-    - docker login -u "$CI_REGISTRY_USER" -p "$CI_REGISTRY_PASSWORD" $CI_REGISTRY
-    - docker push "$CI_REGISTRY_IMAGE/dependency" --all-tags
-  when: manual
+# # Build the docker image and push to the gitlab container registry
+# docker-build-dependecies:
+#   stage: build
+#   image: docker:latest
+#   services:
+#     - docker:dind
+#   before_script: [] # Ignore global before_script
+#   script:
+#     - docker build -t "$CI_REGISTRY_IMAGE/depencency" Dockerfile.deps
+#     - docker login -u "$CI_REGISTRY_USER" -p "$CI_REGISTRY_PASSWORD" $CI_REGISTRY
+#     - docker push "$CI_REGISTRY_IMAGE/dependency" --all-tags
+#   when: manual
