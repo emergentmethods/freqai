@@ -2,14 +2,8 @@
 # Uses the same python version the docker image is built with
 image: python:3.10.7
 
-# # We only want to run the pipeline on the default branch
-# workflow:
-#   rules:
-#     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
-
 stages:
   - build
-  # - test
 
 # Before script hook for each job to setup dependencies, tried using caching 
 # to speed up subsequent jobs but needs more testing so not important right now
@@ -28,36 +22,6 @@ before_script:
     pip install -r requirements-dev.txt
     pip install -e .
 
-# # Run pytest
-# run-pytest:
-#   stage: test
-#   script: pytest --random-order --cov=freqtrade --cov-config=.coveragerc
-
-# Run flake8
-# run-flake8:
-#   stage: test
-#   before_script: [] # Ignore global before_script
-#   script: 
-#     - pip3 install flake8
-#     - flake8 freqtrade
-
-# # Run isort
-# run-isort:
-#   stage: test
-#   before_script: [] # Ignore global before_script
-#   script:
-#     - pip3 install isort 
-#     - isort --check freqtrade
-
-# Run mypy
-# run-mypy:
-#   image: $CI_REGISTRY_IMAGE/dependency
-#   stage: test
-#   # before_script: [] # Ignore global before_script
-#   script:
-#     - pip3 install mypy 
-#     - mypy freqtrade scripts tests
-
 # Build the docker image and push to the gitlab container registry
 docker-build:
   stage: build
@@ -70,17 +34,3 @@ docker-build:
     - docker login -u "$CI_REGISTRY_USER" -p "$CI_REGISTRY_PASSWORD" $CI_REGISTRY
     - docker build --pull -t "$CI_REGISTRY_IMAGE:$CI_COMMIT_BRANCH-latest" -t "$CI_REGISTRY_IMAGE:$CI_COMMIT_BRANCH-$CI_COMMIT_SHORT_SHA" .
     - docker push "$CI_REGISTRY_IMAGE" --all-tags
-
-
-# # Build the docker image and push to the gitlab container registry
-# docker-build-dependecies:
-#   stage: build
-#   image: docker:latest
-#   services:
-#     - docker:dind
-#   before_script: [] # Ignore global before_script
-#   script:
-#     - docker build -t "$CI_REGISTRY_IMAGE/depencency" Dockerfile.deps
-#     - docker login -u "$CI_REGISTRY_USER" -p "$CI_REGISTRY_PASSWORD" $CI_REGISTRY
-#     - docker push "$CI_REGISTRY_IMAGE/dependency" --all-tags
-#   when: manual
