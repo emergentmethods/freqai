@@ -8,6 +8,7 @@ import threading
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, Tuple, TypedDict
+import copy
 
 import numpy as np
 import pandas as pd
@@ -284,7 +285,7 @@ class FreqaiDataDrawer:
         Save metric tracker of all pair metrics collected.
         """
         with self.save_lock:
-            serializable = self.metric_update_tracker.copy()
+            serializable = copy.deepcopy(self.metric_update_tracker)
             for key in self.metric_update_tracker:
                 serializable[key]["datetime_updated"] = serializable[key]["datetime_updated"].timestamp()
             with open(self.metric_update_tracker_path, 'w') as fp:
