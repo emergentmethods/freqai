@@ -79,12 +79,17 @@ class FreqaiDataDrawer:
         self.follower_dict_path = Path(
             self.full_path / f"follower_dictionary-{self.follower_name}.json"
         )
+        self.historic_external_data: DataFrame = pd.DataFrame()
+        self.metric_update_tracker: Dict[str, Dict[str, Any]] = {}
         self.historic_predictions_path = Path(self.full_path / "historic_predictions.pkl")
+        self.historic_external_data_path = Path(self.full_path / "historic_external_data.pkl")
+        self.load_metric_update_tracker_from_disk()
         self.historic_predictions_bkp_path = Path(
             self.full_path / "historic_predictions.backup.pkl")
         self.pair_dictionary_path = Path(self.full_path / "pair_dictionary.json")
         self.global_metadata_path = Path(self.full_path / "global_metadata.json")
         self.metric_tracker_path = Path(self.full_path / "metric_tracker.json")
+        self.metric_update_tracker_path = Path(self.full_path / "metric_update_tracker.json")
         self.follow_mode = follow_mode
         if follow_mode:
             self.create_follower_dict()
@@ -102,8 +107,6 @@ class FreqaiDataDrawer:
                 "model_filename": "", "trained_timestamp": 0,
                 "data_path": "", "extras": {}}
         self.model_type = self.freqai_info.get('model_save_type', 'joblib')
-        self.historic_external_data: DataFrame = pd.DataFrame()
-        self.metric_update_tracker: Dict[str, Dict[str, Any]] = {}
 
     def update_metric_tracker(self, metric: str, value: float, pair: str) -> None:
         """
@@ -177,6 +180,20 @@ class FreqaiDataDrawer:
             else:
                 logger.info("Could not find existing metric tracker, starting from scratch")
 
+    def load_metric_update_tracker_from_disk(self):
+        """
+        Tries to load an existing metrics dictionary if the user
+        wants to collect metrics.
+        """
+
+        exists = self.metric_update_tracker_path.is_file()
+        if exists:
+            with open(self.metric_update_tracker_path, "r") as fp:
+                self.metric_update_tracker = rapidjson.load(fp, number_mode=rapidjson.NM_NATIVE)
+            logger.info("Loading existing metric update tracker (external data) from disk.")
+        else:
+            logger.info("Could not find existing metric update tracker (external data), starting from scratch")
+
     def load_historic_predictions_from_disk(self):
         """
         Locate and load a previously saved historic predictions.
@@ -209,6 +226,27 @@ class FreqaiDataDrawer:
 
         return exists
 
+
+    def load_historic_external_data_from_disk(self):
+        """
+        Locate and load a previously saved historic predictions.
+        :return: bool - whether or not the drawer was located
+        """
+        exists = self.historic_external_data_path.is_file()
+        if exists:
+
+            with open(self.historic_external_data_path, "rb") as fp:
+                self.historic_external_data = cloudpickle.load(fp)
+            logger.info(
+                f"Found existing historic external_data at {self.full_path}, but beware "
+                "that statistics may be inaccurate if the bot has been offline for "
+                "an extended period of time."
+            )
+        else:
+            logger.info("Could not find existing historic_predictions, starting from scratch")
+
+        return exists
+
     def save_historic_predictions_to_disk(self):
         """
         Save historic predictions pickle to disk
@@ -219,6 +257,13 @@ class FreqaiDataDrawer:
         # create a backup
         shutil.copy(self.historic_predictions_path, self.historic_predictions_bkp_path)
 
+    def save_historic_external_data_to_disk(self):
+        """
+        Save historic external data to disk
+        """
+        with open(self.historic_external_data_path, "wb") as fp:
+            cloudpickle.dump(self.historic_external_data, fp, protocol=cloudpickle.DEFAULT_PROTOCOL)
+
     def save_metric_tracker_to_disk(self):
         """
         Save metric tracker of all pair metrics collected.
@@ -226,6 +271,15 @@ class FreqaiDataDrawer:
         with self.save_lock:
             with open(self.metric_tracker_path, 'w') as fp:
                 rapidjson.dump(self.metric_tracker, fp, default=self.np_encoder,
+                               number_mode=rapidjson.NM_NATIVE)
+
+    def save_metric_update_tracker_to_disk(self):
+        """
+        Save metric tracker of all pair metrics collected.
+        """
+        with self.save_lock:
+            with open(self.metric__update_tracker_path, 'w') as fp:
+                rapidjson.dump(self.metric_update_tracker, fp, default=self.np_encoder,
                                number_mode=rapidjson.NM_NATIVE)
 
     def save_drawer_to_disk(self):

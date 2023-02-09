@@ -377,6 +377,8 @@ class FreqaiAPI:
             seconds=timeframe_to_seconds(self.config['timeframe']))
         hist_df.fillna(method='ffill', inplace=True)
         self.dd.historic_external_data = hist_df
+        self.dd.save_historic_external_data_to_disk()
+        self.dd.save_metric_update_tracker_to_disk()
 
     def ffill_historic_values(self):
         """
