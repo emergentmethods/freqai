@@ -12,7 +12,6 @@ import san
 from pandas import DataFrame
 from san import AsyncBatch
 from san.graphql import execute_gql
-import contextlib
 
 from freqtrade.configuration import TimeRange
 # from freqtrade.exceptions import OperationalException
@@ -96,10 +95,11 @@ class FreqaiAPI:
         for metric in metrics_to_get:
             for slug in slugs:
                 metric_slug.append(f'{metric}/{slug}')
-                self.dd.metric_update_tracker[f'{metric}/{slug}'] = {
-                    'datetime': datetime.now(tz=timezone.utc),
-                    'minInterval': self.config['timeframe']}
-        self.metric_slug_final = metric_slug.copy()
+                # self.dd.metric_update_tracker[f'{metric}/{slug}'] = {
+                #     'datetime_updated': datetime.now(tz=timezone.utc),
+                #     'minInterval': self.config['timeframe'],
+                #     'datetime_grabbed': datetime.now(tz=timezone.utc)}
+        self.dd.metric_slug_final = metric_slug.copy()
 
         return metric_slug
 
@@ -141,18 +141,18 @@ class FreqaiAPI:
             metrics = ["price_usd"]
         else:
             if metric == "price_usd":
-                self.metric_slug_final.remove(f'{metric}/{slug}')
+                self.dd.metric_slug_final.remove(f'{metric}/{slug}')
                 return True
             projects = san.get("projects/all")
             if not projects['slug'].str.contains(slug).any():
                 logger.warning(f'{slug} not in projects list.')
-                self.metric_slug_final.remove(f'{metric}/{slug}')
+                self.dd.metric_slug_final.remove(f'{metric}/{slug}')
                 return True
             metrics = san.available_metrics_for_slug(slug)
 
         if metric not in metrics:
             logger.warning(f'{metric} not in available {slug} metrics list. Skipping.')
-            self.metric_slug_final.remove(f'{metric}/{slug}')
+            self.dd.metric_slug_final.remove(f'{metric}/{slug}')
             return True
 
         meta_dict = san.metadata(
@@ -162,7 +162,7 @@ class FreqaiAPI:
 
         if not meta_dict['isAccessible']:
             logger.warning(f'{metric} not accessible with current plan. Skipping.')
-            self.metric_slug_final.remove(f'{metric}/{slug}')
+            self.dd.metric_slug_final.remove(f'{metric}/{slug}')
             return True
 
         if meta_dict['isRestricted']:
@@ -176,11 +176,11 @@ class FreqaiAPI:
                 restricted_to = None
             if restricted_from and restricted_from > start:
                 logger.warning(f'Not enough data at start for {metric}/{slug}')
-                self.metric_slug_final.remove(f'{metric}/{slug}')
+                self.dd.metric_slug_final.remove(f'{metric}/{slug}')
                 return True
             if restricted_to and restricted_to < stop:
                 logger.warning(f'Not enough data at end for {metric}/{slug}')
-                self.metric_slug_final.remove(f'{metric}/{slug}')
+                self.dd.metric_slug_final.remove(f'{metric}/{slug}')
                 return True
 
         minInt_sec = timeframe_to_seconds(meta_dict['minInterval'])
@@ -190,14 +190,15 @@ class FreqaiAPI:
         if minInt_sec > maxInt_sec:
             logger.warning(f'Removed {metric}/{slug} since its minimum interval was greater'
                            f' than user requested {meta_dict["minInterval"]} > {maxInt}')
-            self.metric_slug_final.remove(f'{metric}/{slug}')
+            self.dd.metric_slug_final.remove(f'{metric}/{slug}')
             return True
         if minInt_sec < stratInt_sec:
             logger.warning(f'Removed {metric}/{slug} since its minimum interval was less'
                            f' than  than strat tf. {minInt_sec} < {stratInt_sec}')
-            self.metric_slug_final.remove(f'{metric}/{slug}')
+            self.dd.metric_slug_final.remove(f'{metric}/{slug}')
             return True
 
+        self.dd.metric_update_tracker[f'{metric}/{slug}'] = {}
         self.dd.metric_update_tracker[f'{metric}/{slug}']['minInterval'] = meta_dict['minInterval']
 
         return skip
@@ -216,7 +217,7 @@ class FreqaiAPI:
             start = datetime.fromtimestamp(timerange.startts, tz=timezone.utc)
             stop = datetime.fromtimestamp(timerange.stopts, tz=timezone.utc)
         else:
-            metric_slug = self.metric_slug_final
+            metric_slug = self.dd.metric_slug_final
             self.metric_slug_temporary = []
             start = None
             # stop = self.dd.current_candle
@@ -296,7 +297,7 @@ class FreqaiAPI:
         """
         logger.info(f'External successfully fetching metrics for {get_many_dict.keys()}')
         metric_dict = dict(zip(get_many_dict.keys(), response))
-        # metric_dict = dict(zip(self.metric_slug_final, response))
+        # metric_dict = dict(zip(self.dd.metric_slug_final, response))
         to_remove = []
         for metric in get_many_dict.keys():
             # metric_dict[metric].rename(columns={'value': metric}, inplace=True)
@@ -321,7 +322,7 @@ class FreqaiAPI:
                     on='datetime'
                     ).ffill()
         for item in to_remove:
-            self.metric_slug_final.remove(item)
+            self.dd.metric_slug_final.remove(item)
 
     def append_new_row_to_historic_external_data(self, response, get_many_dict):
         """

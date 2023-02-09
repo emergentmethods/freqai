@@ -83,13 +83,15 @@ class FreqaiDataDrawer:
         self.metric_update_tracker: Dict[str, Dict[str, Any]] = {}
         self.historic_predictions_path = Path(self.full_path / "historic_predictions.pkl")
         self.historic_external_data_path = Path(self.full_path / "historic_external_data.pkl")
+        self.metric_update_tracker_path = Path(self.full_path / "metric_update_tracker.json")
+        self.metric_slug_path = Path(self.full_path / "metric_slug_final.json")
+        self.metric_slug_final: list = []
         self.load_metric_update_tracker_from_disk()
         self.historic_predictions_bkp_path = Path(
             self.full_path / "historic_predictions.backup.pkl")
         self.pair_dictionary_path = Path(self.full_path / "pair_dictionary.json")
         self.global_metadata_path = Path(self.full_path / "global_metadata.json")
         self.metric_tracker_path = Path(self.full_path / "metric_tracker.json")
-        self.metric_update_tracker_path = Path(self.full_path / "metric_update_tracker.json")
         self.follow_mode = follow_mode
         if follow_mode:
             self.create_follower_dict()
@@ -190,9 +192,14 @@ class FreqaiDataDrawer:
         if exists:
             with open(self.metric_update_tracker_path, "r") as fp:
                 self.metric_update_tracker = rapidjson.load(fp, number_mode=rapidjson.NM_NATIVE)
+                for key in self.metric_update_tracker:
+                    self.metric_update_tracker[key]["datetime_updated"] = datetime.fromtimestamp(self.metric_update_tracker[key]["datetime_updated"], tz=timezone.utc)
             logger.info("Loading existing metric update tracker (external data) from disk.")
+            with open(self.metric_slug_path, "r") as fp:
+                self.metric_slug_final = rapidjson.load(fp, number_mode=rapidjson.NM_NATIVE)
+            logger.info("Loading existing metric slug list (external data) from disk.")            
         else:
-            logger.info("Could not find existing metric update tracker (external data), starting from scratch")
+            logger.info("Could not find existing metric update tracker or slug list (external data), starting from scratch")
 
     def load_historic_predictions_from_disk(self):
         """
@@ -225,7 +232,6 @@ class FreqaiDataDrawer:
             )
 
         return exists
-
 
     def load_historic_external_data_from_disk(self):
         """
@@ -278,8 +284,14 @@ class FreqaiDataDrawer:
         Save metric tracker of all pair metrics collected.
         """
         with self.save_lock:
-            with open(self.metric__update_tracker_path, 'w') as fp:
-                rapidjson.dump(self.metric_update_tracker, fp, default=self.np_encoder,
+            serializable = self.metric_update_tracker.copy()
+            for key in self.metric_update_tracker:
+                serializable[key]["datetime_updated"] = serializable[key]["datetime_updated"].timestamp()
+            with open(self.metric_update_tracker_path, 'w') as fp:
+                rapidjson.dump(serializable, fp, default=self.np_encoder,
+                               number_mode=rapidjson.NM_NATIVE)
+            with open(self.metric_slug_path, 'w') as fp:
+                rapidjson.dump(self.metric_slug_final, fp, default=self.np_encoder,
                                number_mode=rapidjson.NM_NATIVE)
 
     def save_drawer_to_disk(self):
