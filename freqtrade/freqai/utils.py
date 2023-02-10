@@ -201,13 +201,11 @@ def plot_feature_importance(model: Any, pair: str, dk: FreqaiDataKitchen,
         store_plot_file(fig, f"{dk.model_filename}-{label}.html", dk.data_path)
 
         # Plot santiment wordcloud
-        try:
+        if dk.freqai_config["feature_parameters"]["include_santiment_data"]:
             cloud = create_wordcloud(fi_df=fi_df)
             filename = f'{dk.data_path}/{dk.model_filename}-{label}-wordcloud.png'
             cloud.save(filename, 'PNG')
             logger.info(f"Stored plot as {filename}")
-        except ValueError:
-            pass
 
         if dk.freqai_config["feature_parameters"]["principal_component_analysis"]:
             plot_pca_correlation(pair, dk)
@@ -217,7 +215,7 @@ def create_wordcloud(fi_df: pd.DataFrame) -> Image:
     """
     Create a word cloud for feature importances
     """
-    santiment_features = [f for f in fi_df['feature_names'] if '%-' in f]
+    santiment_features = [f for f in fi_df['feature_names'] if '%%-' in f]
 
     fi_df_santiment = fi_df.loc[fi_df["feature_names"].isin(santiment_features)].copy()
 
