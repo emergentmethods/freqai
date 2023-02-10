@@ -98,6 +98,7 @@ class FreqaiDataDrawer:
             self.create_follower_dict()
         self.load_drawer_from_disk()
         self.load_historic_predictions_from_disk()
+        self.load_historic_external_data_from_disk()
         self.metric_tracker: Dict[str, Dict[str, Dict[str, list]]] = {}
         self.load_metric_tracker_from_disk()
         self.training_queue: Dict[str, int] = {}
