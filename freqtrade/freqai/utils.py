@@ -9,7 +9,7 @@ import numpy as np
 import pandas as pd
 import rapidjson
 from PIL import Image
-from wordcloud import WordCloud
+from wordcloud import ImageColorGenerator, WordCloud
 
 from freqtrade.configuration import TimeRange
 from freqtrade.constants import Config
@@ -247,12 +247,13 @@ def create_wordcloud(fi_df: pd.DataFrame, img_path: str) -> Image:
     fi_df_santiment.loc[fi_df_btc.index, 'feature_names'] = fi_df_btc["feature_names"]
 
     mask = np.array(Image.open(img_path))
+    image_colors = ImageColorGenerator(mask)
     wordcloud = WordCloud(background_color="rgba(255, 255, 255, 0)", mode="RGBA",
                           mask=mask, max_font_size=100,
-                          random_state=42, colormap="magma", width=200, height=200)
+                          random_state=42, width=200, height=200)
 
     d = {a: x for a, x in fi_df_santiment.values}
-    return wordcloud.fit_words(d).to_image()
+    return wordcloud.fit_words(d).recolor(color_func=image_colors).to_image()
 
 
 def record_params(config: Dict[str, Any], full_path: Path) -> None:
