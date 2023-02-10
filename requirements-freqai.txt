@@ -10,3 +10,5 @@ lightgbm==3.3.4
 xgboost==1.7.3
 tensorboard==2.11.2
 sanpy==0.11.5
+wordcloud==1.8.2.2
+pillow==9.4.0
