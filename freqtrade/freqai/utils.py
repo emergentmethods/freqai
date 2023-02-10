@@ -1,5 +1,6 @@
 import copy
 import logging
+import random
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Tuple
@@ -202,7 +203,9 @@ def plot_feature_importance(model: Any, pair: str, dk: FreqaiDataKitchen,
 
         # Plot santiment wordcloud
         if dk.freqai_config["feature_parameters"]["include_santiment_data"]:
-            img_path = dk.freqai_config.get("word_cloud_mask_path", "user_data/plot/word_cloud_mask.jpg")
+            paths = dk.freqai_config.get("word_cloud_mask_paths",
+                                         ["user_data/plot/word_cloud_mask.jpg"])
+            img_path = random.choice(paths)
             cloud = create_wordcloud(fi_df=fi_df, img_path=img_path)
             filename = f'{dk.data_path}/{dk.model_filename}-{label}-wordcloud.png'
             cloud.save(filename, 'PNG')
