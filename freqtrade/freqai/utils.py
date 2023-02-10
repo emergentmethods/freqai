@@ -7,6 +7,8 @@ from typing import Any, Dict, Tuple
 import numpy as np
 import pandas as pd
 import rapidjson
+from PIL import Image
+from wordcloud import WordCloud
 
 from freqtrade.configuration import TimeRange
 from freqtrade.constants import Config
@@ -197,6 +199,46 @@ def plot_feature_importance(model: Any, pair: str, dk: FreqaiDataKitchen,
         fig.update_layout(title_text=f"Best and worst features by importance {pair}")
         label = label.replace('&', '').replace('%', '')  # escape two FreqAI specific characters
         store_plot_file(fig, f"{dk.model_filename}-{label}.html", dk.data_path)
+
+        # Plot santiment wordcloud
+        try:
+            santiment_features = [f for f in fi_df['feature_names'] if '%%-' in f]
+
+            fi_df_santiment = fi_df.loc[fi_df["feature_names"].isin(santiment_features)].copy()
+
+            fi_df_santiment["feature_names"] = fi_df_santiment["feature_names"].apply(
+                lambda s: s.lstrip('%%-'))
+            fi_df_santiment["feature_names"] = fi_df_santiment["feature_names"].apply(
+                lambda s: s.replace('_', ' '))
+
+            fi_df_shifts = fi_df_santiment.loc[fi_df_santiment["feature_names"].str.contains(
+                'shift')].copy()
+            fi_df_shifts["feature_names"] = fi_df_shifts["feature_names"].apply(
+                lambda s: s.split('shift')[0] + '(shift' + s.split('shift')[1] + ')')
+            fi_df_santiment.loc[fi_df_shifts.index, 'feature_names'] = fi_df_shifts["feature_names"]
+
+            fi_df_eth = fi_df_santiment.loc[fi_df_santiment["feature_names"].str.contains(
+                'ethereum')].copy()
+            fi_df_eth["feature_names"] = fi_df_eth["feature_names"].apply(
+                lambda s: s.replace('ethereum', 'ETH'))
+            fi_df_santiment.loc[fi_df_eth.index, 'feature_names'] = fi_df_eth["feature_names"]
+
+            fi_df_btc = fi_df_santiment.loc[fi_df_santiment["feature_names"].str.contains(
+                'bitcoin')].copy()
+            fi_df_btc["feature_names"] = fi_df_btc["feature_names"].apply(
+                lambda s: s.replace('bitcoin', 'BTC'))
+            fi_df_santiment.loc[fi_df_btc.index, 'feature_names'] = fi_df_btc["feature_names"]
+
+            mask = np.array(Image.open('freqtrade/freqai/santiment_s.jpg'))
+            wordcloud = WordCloud(background_color="rgba(255, 255, 255, 0)", mode="RGBA",
+                                  mask=mask, max_font_size=100,
+                                  random_state=42, colormap="magma", width=200, height=200)
+
+            d = {a: x for a, x in fi_df_santiment.values}
+            cloud = wordcloud.fit_words(d).to_image()
+            cloud.save(f'{dk.data_path}/{dk.model_filename}-santiment-wordcloud.png', 'PNG')
+        except ValueError:
+            pass
 
         if dk.freqai_config["feature_parameters"]["principal_component_analysis"]:
             plot_pca_correlation(pair, dk)
