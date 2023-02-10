@@ -203,7 +203,7 @@ def plot_feature_importance(model: Any, pair: str, dk: FreqaiDataKitchen,
         # Plot santiment wordcloud
         if dk.freqai_config["feature_parameters"]["include_santiment_data"]:
             img_path = dk.freqai_config.get("word_cloud_mask_path", "user_data/plot/word_cloud_mask.jpg")
-            cloud = create_wordcloud(fi_df=fi_df, img_path)
+            cloud = create_wordcloud(fi_df=fi_df, img_path=img_path)
             filename = f'{dk.data_path}/{dk.model_filename}-{label}-wordcloud.png'
             cloud.save(filename, 'PNG')
             logger.info(f"Stored plot as {filename}")
