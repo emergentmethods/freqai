@@ -202,7 +202,8 @@ def plot_feature_importance(model: Any, pair: str, dk: FreqaiDataKitchen,
 
         # Plot santiment wordcloud
         if dk.freqai_config["feature_parameters"]["include_santiment_data"]:
-            cloud = create_wordcloud(fi_df=fi_df)
+            img_path = dk.freqai_config.get("word_cloud_mask_path", "user_data/plot/word_cloud_mask.jpg")
+            cloud = create_wordcloud(fi_df=fi_df, img_path)
             filename = f'{dk.data_path}/{dk.model_filename}-{label}-wordcloud.png'
             cloud.save(filename, 'PNG')
             logger.info(f"Stored plot as {filename}")
@@ -211,7 +212,7 @@ def plot_feature_importance(model: Any, pair: str, dk: FreqaiDataKitchen,
             plot_pca_correlation(pair, dk)
 
 
-def create_wordcloud(fi_df: pd.DataFrame) -> Image:
+def create_wordcloud(fi_df: pd.DataFrame, img_path: str) -> Image:
     """
     Create a word cloud for feature importances
     """
@@ -242,7 +243,7 @@ def create_wordcloud(fi_df: pd.DataFrame) -> Image:
         lambda s: s.replace('bitcoin', 'BTC'))
     fi_df_santiment.loc[fi_df_btc.index, 'feature_names'] = fi_df_btc["feature_names"]
 
-    mask = np.array(Image.open('user_data/plot/wordcloud_mask.jpg'))
+    mask = np.array(Image.open(img_path))
     wordcloud = WordCloud(background_color="rgba(255, 255, 255, 0)", mode="RGBA",
                           mask=mask, max_font_size=100,
                           random_state=42, colormap="magma", width=200, height=200)
