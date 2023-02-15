@@ -362,6 +362,7 @@ class PerformanceTracker:
         :df_metric: dataframe containing accuracy metric and match and price scores
         """
         df_historic_predictions = self.historic_predictions
+        num_candles = self.config["freqai"].get("fit_live_predictions_candles", 600)
 
         warmed_up = df_historic_predictions[
             df_historic_predictions['&s-minima_sort_threshold'] > -2
@@ -394,7 +395,27 @@ class PerformanceTracker:
                 df_historic_predictions.index[-1], 'date_pred'
             ]
 
-        df_hist = df_historic_predictions.loc[warmed_up_idx:]
+        available_candles = df_historic_predictions.iloc[warmed_up_idx:].shape[0]
+
+        if available_candles < num_candles:
+            logger.info(
+                f'Waiting on {num_candles - available_candles} candles '
+                f'Before accuracy can be computed for {self.pair}.'
+            )
+            accuracy = {}
+
+            return accuracy
+
+        df_hist = df_historic_predictions.iloc[warmed_up_idx: -self.label_period_candles]
+
+        if df_hist.empty:
+            logger.warning(
+                f'df_hist empty...problem in '
+                f' {self.pair}. Len df_historic_predictions {len(df_historic_predictions)}.'
+            )
+            accuracy = {}
+
+            return accuracy
 
         df_min = df_hist[['prediction_min', 'target_min']]
         matches = np.where(df_min['prediction_min'] == df_min['target_min'])[0]
