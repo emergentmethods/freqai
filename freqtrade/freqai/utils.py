@@ -394,7 +394,7 @@ class PerformanceTracker:
                 df_historic_predictions.index[-1], 'date_pred'
             ]
 
-        df_hist = df_historic_predictions.loc[warmed_up_idx:]
+        df_hist = df_historic_predictions.loc[warmed_up_idx:-self.label_period_candles]
 
         df_min = df_hist[['prediction_min', 'target_min']]
         matches = np.where(df_min['prediction_min'] == df_min['target_min'])[0]
