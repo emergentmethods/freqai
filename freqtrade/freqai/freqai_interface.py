@@ -646,6 +646,10 @@ class IFreqaiModel(ABC):
             strategy, corr_dataframes, base_dataframes, pair
         )
 
+        kernel = self.freqai_info["feature_parameters"]["label_period_candles"]
+        new_trained_timerange.stopts -= kernel * timeframe_to_seconds(self.config["timeframe"])
+        new_trained_timerange.startts += kernel * timeframe_to_seconds(self.config["timeframe"])
+
         unfiltered_dataframe = dk.slice_dataframe(new_trained_timerange, unfiltered_dataframe)
 
         if self.add_santiment_data:
