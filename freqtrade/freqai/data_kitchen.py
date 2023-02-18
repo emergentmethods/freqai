@@ -536,9 +536,6 @@ class FreqaiDataKitchen:
 
         logger.info(f"PCA reduced total features from  {n_components} to {n_keep_components}")
 
-        if not self.data_path.is_dir():
-            self.data_path.mkdir(parents=True, exist_ok=True)
-
         return None
 
     def pca_transform(self, filtered_dataframe: DataFrame) -> None:
