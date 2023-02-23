@@ -1,7 +1,7 @@
 import copy
 import logging
 import random
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, Tuple
 
@@ -201,6 +201,13 @@ def plot_feature_importance(model: Any, pair: str, dk: FreqaiDataKitchen,
         label = label.replace('&', '').replace('%', '')  # escape two FreqAI specific characters
         store_plot_file(fig, f"{dk.model_filename}-{label}.html", dk.data_path)
 
+        # save latest feature importances
+        df_feature_importances = make_feature_importance_df(
+            fi_df, dk.data_path, dk.model_filename, dk.freqai_config)
+        filename = f'{dk.data_path}/{dk.model_filename}-{label}-feature-importances.pkl'
+        df_feature_importances.to_pickle(filename)
+        logger.info(f"Stored feature importances as {filename}")
+
         # Plot santiment wordcloud
         if dk.freqai_config["feature_parameters"]["include_santiment_data"]:
             paths = dk.freqai_config.get("word_cloud_mask_paths",
@@ -213,6 +220,60 @@ def plot_feature_importance(model: Any, pair: str, dk: FreqaiDataKitchen,
 
         if dk.freqai_config["feature_parameters"]["principal_component_analysis"]:
             plot_pca_correlation(pair, dk)
+
+
+def make_feature_importance_df(
+        fi_df: pd.DataFrame, data_path: Path, model_filename: str, config: Dict
+) -> pd.DataFrame:
+    """
+    Create df containing current and historic (time window of
+    config["feature_parameters"]["feature_importance_window_days"]) to be saved as pkl
+    for creating dashboard figures.
+    """
+    pair = model_filename.split('_')[1].upper()
+    time_point = datetime.fromtimestamp(
+        int(model_filename.split('_')[-1].split('-')[0]),
+        tz=timezone.utc
+        )
+    fi_df_usdt = fi_df.loc[fi_df["feature_names"].str.contains(
+        'USDTUSDT')].copy()
+    fi_df_usdt["feature_names"] = fi_df_usdt["feature_names"].apply(
+        lambda s: s.replace('/USDTUSDT', ''))
+    fi_df.loc[fi_df_usdt.index, 'feature_names'] = fi_df_usdt["feature_names"]
+    fi_df_santiment = fi_df.loc[fi_df["feature_names"].str.contains(
+        '%%-')].copy()
+    fi_df_santiment["feature_names"] = fi_df_santiment["feature_names"].apply(
+        lambda s: s.replace('%%-', 'S '))
+    fi_df.loc[fi_df_santiment.index, 'feature_names'] = fi_df_santiment["feature_names"]
+    fi_df_not_santiment = fi_df.loc[fi_df["feature_names"].str.contains(
+        '%-')].copy()
+    fi_df_not_santiment["feature_names"] = fi_df_not_santiment["feature_names"].apply(
+        lambda s: s.replace('%-', ''))
+    fi_df.loc[fi_df_not_santiment.index, 'feature_names'] = fi_df_not_santiment["feature_names"]
+    fi_df["feature_names"] = fi_df["feature_names"].apply(
+        lambda s: s.replace('_', ' '))
+
+    fi_df = fi_df.set_index('feature_names').rename(
+        columns={'feature_importance': time_point})
+
+    main_path = data_path.parent
+    folders = sorted([f for f in list(main_path.iterdir()) if pair in str(f)], reverse=True)
+
+    if len(folders) == 1:
+        return fi_df
+    elif len(folders) > 1:
+        folder = folders[1]
+        file = [f for f in list(folder.iterdir()) if 'feature-importances.pkl' in str(f)]
+        if len(file) == 0:
+            logger.info('No feature importances .pkl exists in folder %s' % (folder))
+            return fi_df
+        else:
+            df = pd.read_pickle(file[0])
+            window = config["feature_parameters"]["feature_importance_window_days"]
+            time_point = df.columns[0]
+            if time_point < fi_df.columns[0] - timedelta(days=window):
+                df = df.iloc[:, 1:]
+            return pd.concat([df, fi_df], axis=1)
 
 
 def create_wordcloud(fi_df: pd.DataFrame, img_path: str) -> Image:
