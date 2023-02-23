@@ -201,12 +201,16 @@ def plot_feature_importance(model: Any, pair: str, dk: FreqaiDataKitchen,
         label = label.replace('&', '').replace('%', '')  # escape two FreqAI specific characters
         store_plot_file(fig, f"{dk.model_filename}-{label}.html", dk.data_path)
 
-        # save latest feature importances
-        df_feature_importances = make_feature_importance_df(
-            fi_df, dk.data_path, dk.model_filename, dk.freqai_config)
-        filename = f'{dk.data_path}/{dk.model_filename}-{label}-feature-importances.pkl'
-        df_feature_importances.to_pickle(filename)
-        logger.info(f"Stored feature importances as {filename}")
+        try:
+            # save latest feature importances
+            df_feature_importances = make_feature_importance_df(
+                fi_df, dk.data_path, dk.model_filename, dk.freqai_config)
+            filename = f'{dk.data_path}/{dk.model_filename}-{label}-feature-importances.pkl'
+            df_feature_importances.to_pickle(filename)
+            logger.info(f"Stored feature importances as {filename}")
+        except Exception as e:
+            logger.warning("Something went wrong trying to pickle feature"
+                           f"importances {e}")
 
         # Plot santiment wordcloud
         if dk.freqai_config["feature_parameters"]["include_santiment_data"]:
