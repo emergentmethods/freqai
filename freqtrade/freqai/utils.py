@@ -234,27 +234,27 @@ def make_feature_importance_df(
     config["feature_parameters"]["feature_importance_window_days"]) to be saved as pkl
     for creating dashboard figures.
     """
-    df = copy.deepcopy(fi_df)
+    df = fi_df.copy()
     pair = model_filename.split('_')[1].upper()
     time_point = datetime.fromtimestamp(
         int(model_filename.split('_')[-1].split('-')[0]),
         tz=timezone.utc
         )
-    fi_df_usdt = df.loc[df["feature_names"].str.contains(
+    df_usdt = df.loc[df["feature_names"].str.contains(
         'USDTUSDT')].copy()
-    fi_df_usdt["feature_names"] = fi_df_usdt["feature_names"].apply(
+    df_usdt["feature_names"] = df_usdt["feature_names"].apply(
         lambda s: s.replace('/USDTUSDT', ''))
-    df.loc[fi_df_usdt.index, 'feature_names'] = fi_df_usdt["feature_names"]
-    fi_df_santiment = df.loc[df["feature_names"].str.contains(
+    df.loc[df_usdt.index, 'feature_names'] = df_usdt["feature_names"]
+    df_santiment = df.loc[df["feature_names"].str.contains(
         '%%-')].copy()
-    fi_df_santiment["feature_names"] = fi_df_santiment["feature_names"].apply(
+    df_santiment["feature_names"] = df_santiment["feature_names"].apply(
         lambda s: s.replace('%%-', 'S '))
-    df.loc[fi_df_santiment.index, 'feature_names'] = fi_df_santiment["feature_names"]
-    fi_df_not_santiment = df.loc[df["feature_names"].str.contains(
+    df.loc[df_santiment.index, 'feature_names'] = df_santiment["feature_names"]
+    df_not_santiment = df.loc[df["feature_names"].str.contains(
         '%-')].copy()
-    fi_df_not_santiment["feature_names"] = fi_df_not_santiment["feature_names"].apply(
+    df_not_santiment["feature_names"] = df_not_santiment["feature_names"].apply(
         lambda s: s.replace('%-', ''))
-    df.loc[fi_df_not_santiment.index, 'feature_names'] = fi_df_not_santiment["feature_names"]
+    df.loc[df_not_santiment.index, 'feature_names'] = df_not_santiment["feature_names"]
     df["feature_names"] = df["feature_names"].apply(
         lambda s: s.replace('_', ' '))
 
@@ -273,12 +273,12 @@ def make_feature_importance_df(
             logger.info('No feature importances .pkl exists in folder %s' % (folder))
             return df
         else:
-            df = pd.read_pickle(file[0])
+            df_previous = pd.read_pickle(file[0])
             window = config["feature_parameters"]["feature_importance_window_days"]
-            time_point = df.columns[0]
-            if time_point < df.columns[0] - timedelta(days=window):
-                df = df.iloc[:, 1:]
-            return pd.concat([df, df], axis=1)
+            oldest_time_point = df_previous.columns[0]
+            if oldest_time_point < df.columns[0] - timedelta(days=window):
+                df_previous = df_previous.iloc[:, 1:]
+            return pd.concat([df_previous, df], axis=1)
 
 
 def create_wordcloud(fi_df: pd.DataFrame, img_path: str) -> Image:
