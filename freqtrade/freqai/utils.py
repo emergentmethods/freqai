@@ -145,7 +145,7 @@ def get_required_data_timerange(config: Config) -> TimeRange:
 #             prepend=config.get("prepend_data", False),
 #         )
 
-
+# flake8: noqa: C901
 def plot_feature_importance(model: Any, pair: str, dk: FreqaiDataKitchen,
                             count_max: int = 200) -> None:
     """
@@ -213,14 +213,17 @@ def plot_feature_importance(model: Any, pair: str, dk: FreqaiDataKitchen,
                            f"importances {e}")
 
         # Plot wordcloud
+        train_vals = dk.freqai_config["model_training_parameters"].values()
         try:
-            paths = dk.freqai_config.get("word_cloud_mask_paths",
-                                         ["user_data/plot/word_cloud_mask.jpg"])
-            img_path = random.choice(paths)
-            cloud = create_wordcloud(fi_df=fi_df, img_path=img_path)
-            filename = f'{dk.data_path}/{dk.model_filename}-{label}-wordcloud.png'
-            cloud.save(filename, 'PNG')
-            logger.info(f"Stored plot as {filename}")
+            if "gpu_hist" in train_vals or "GPU" in train_vals:
+                # only do wordclouds for high performance runs
+                paths = dk.freqai_config.get("word_cloud_mask_paths",
+                                             ["user_data/plot/word_cloud_mask.jpg"])
+                img_path = random.choice(paths)
+                cloud = create_wordcloud(fi_df=fi_df, img_path=img_path)
+                filename = f'{dk.data_path}/{dk.model_filename}-{label}-wordcloud.png'
+                cloud.save(filename, 'PNG')
+                logger.info(f"Stored plot as {filename}")
         except Exception:
             logger.warning(f"Seomthing went wrong making the cord cloud for {pair}")
 
