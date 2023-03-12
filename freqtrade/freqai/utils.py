@@ -224,8 +224,8 @@ def plot_feature_importance(model: Any, pair: str, dk: FreqaiDataKitchen,
                 filename = f'{dk.data_path}/{dk.model_filename}-{label}-wordcloud.png'
                 cloud.save(filename, 'PNG')
                 logger.info(f"Stored plot as {filename}")
-        except Exception:
-            logger.warning(f"Seomthing went wrong making the cord cloud for {pair}")
+        except Exception as e:
+            logger.exception(f"Something went wrong making the word cloud for {pair}, {e}")
 
         if dk.freqai_config["feature_parameters"]["principal_component_analysis"]:
             plot_pca_correlation(pair, dk)
@@ -290,12 +290,12 @@ def create_wordcloud(fi_df: pd.DataFrame, img_path: str) -> Image:
     """
     Create a word cloud for feature importances
     """
-    santiment_features = [f for f in fi_df['feature_names'] if '%%-' in f]
+    # santiment_features = [f for f in fi_df['feature_names'] if '%%-' in f]
 
-    fi_df_santiment = fi_df.loc[fi_df["feature_names"].isin(santiment_features)].copy()
+    fi_df_santiment = fi_df  # .loc[fi_df["feature_names"].isin(santiment_features)].copy()
 
     fi_df_santiment["feature_names"] = fi_df_santiment["feature_names"].apply(
-        lambda s: s.lstrip('%%-'))
+        lambda s: s.lstrip('%-'))
     fi_df_santiment["feature_names"] = fi_df_santiment["feature_names"].apply(
         lambda s: s.replace('_', ' '))
 
@@ -305,17 +305,17 @@ def create_wordcloud(fi_df: pd.DataFrame, img_path: str) -> Image:
         lambda s: s.split('shift')[0] + '(shift' + s.split('shift')[1] + ')')
     fi_df_santiment.loc[fi_df_shifts.index, 'feature_names'] = fi_df_shifts["feature_names"]
 
-    fi_df_eth = fi_df_santiment.loc[fi_df_santiment["feature_names"].str.contains(
-        'ethereum')].copy()
-    fi_df_eth["feature_names"] = fi_df_eth["feature_names"].apply(
-        lambda s: s.replace('ethereum', 'ETH'))
-    fi_df_santiment.loc[fi_df_eth.index, 'feature_names'] = fi_df_eth["feature_names"]
+    # fi_df_eth = fi_df_santiment.loc[fi_df_santiment["feature_names"].str.contains(
+    #     'ethereum')].copy()
+    # fi_df_eth["feature_names"] = fi_df_eth["feature_names"].apply(
+    #     lambda s: s.replace('ethereum', 'ETH'))
+    # fi_df_santiment.loc[fi_df_eth.index, 'feature_names'] = fi_df_eth["feature_names"]
 
-    fi_df_btc = fi_df_santiment.loc[fi_df_santiment["feature_names"].str.contains(
-        'bitcoin')].copy()
-    fi_df_btc["feature_names"] = fi_df_btc["feature_names"].apply(
-        lambda s: s.replace('bitcoin', 'BTC'))
-    fi_df_santiment.loc[fi_df_btc.index, 'feature_names'] = fi_df_btc["feature_names"]
+    # fi_df_btc = fi_df_santiment.loc[fi_df_santiment["feature_names"].str.contains(
+    #     'bitcoin')].copy()
+    # fi_df_btc["feature_names"] = fi_df_btc["feature_names"].apply(
+    #     lambda s: s.replace('bitcoin', 'BTC'))
+    # fi_df_santiment.loc[fi_df_btc.index, 'feature_names'] = fi_df_btc["feature_names"]
 
     mask = np.array(Image.open(img_path))
     image_colors = ImageColorGenerator(mask)
