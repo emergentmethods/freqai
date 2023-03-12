@@ -212,8 +212,8 @@ def plot_feature_importance(model: Any, pair: str, dk: FreqaiDataKitchen,
             logger.warning("Something went wrong trying to pickle feature"
                            f"importances {e}")
 
-        # Plot santiment wordcloud
-        if dk.freqai_config["feature_parameters"]["include_santiment_data"]:
+        # Plot wordcloud
+        try:
             paths = dk.freqai_config.get("word_cloud_mask_paths",
                                          ["user_data/plot/word_cloud_mask.jpg"])
             img_path = random.choice(paths)
@@ -221,6 +221,8 @@ def plot_feature_importance(model: Any, pair: str, dk: FreqaiDataKitchen,
             filename = f'{dk.data_path}/{dk.model_filename}-{label}-wordcloud.png'
             cloud.save(filename, 'PNG')
             logger.info(f"Stored plot as {filename}")
+        except Exception:
+            logger.warning(f"Seomthing went wrong making the cord cloud for {pair}")
 
         if dk.freqai_config["feature_parameters"]["principal_component_analysis"]:
             plot_pca_correlation(pair, dk)
