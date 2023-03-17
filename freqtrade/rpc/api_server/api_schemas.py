@@ -168,6 +168,7 @@ class ShowConfig(BaseModel):
     max_open_trades: IntOrInf
     minimal_roi: Dict[str, Any]
     stoploss: Optional[float]
+    stoploss_on_exchange: bool
     trailing_stop: Optional[bool]
     trailing_stop_positive: Optional[float]
     trailing_stop_positive_offset: Optional[float]
@@ -227,24 +228,33 @@ class TradeSchema(BaseModel):
     fee_close: Optional[float]
     fee_close_cost: Optional[float]
     fee_close_currency: Optional[str]
+
     open_date: str
     open_timestamp: int
     open_rate: float
     open_rate_requested: Optional[float]
     open_trade_value: float
+
     close_date: Optional[str]
     close_timestamp: Optional[int]
     close_rate: Optional[float]
     close_rate_requested: Optional[float]
+
     close_profit: Optional[float]
     close_profit_pct: Optional[float]
     close_profit_abs: Optional[float]
+
     profit_ratio: Optional[float]
     profit_pct: Optional[float]
     profit_abs: Optional[float]
     profit_fiat: Optional[float]
+
+    realized_profit: float
+    realized_profit_ratio: Optional[float]
+
     exit_reason: Optional[str]
     exit_order_status: Optional[str]
+
     stop_loss_abs: Optional[float]
     stop_loss_ratio: Optional[float]
     stop_loss_pct: Optional[float]
@@ -254,6 +264,7 @@ class TradeSchema(BaseModel):
     initial_stop_loss_abs: Optional[float]
     initial_stop_loss_ratio: Optional[float]
     initial_stop_loss_pct: Optional[float]
+
     min_rate: Optional[float]
     max_rate: Optional[float]
     open_order_id: Optional[str]
@@ -272,10 +283,11 @@ class OpenTradeSchema(TradeSchema):
     stoploss_current_dist_ratio: Optional[float]
     stoploss_entry_dist: Optional[float]
     stoploss_entry_dist_ratio: Optional[float]
-    current_profit: float
-    current_profit_abs: float
-    current_profit_pct: float
     current_rate: float
+    total_profit_abs: float
+    total_profit_fiat: Optional[float]
+    total_profit_ratio: Optional[float]
+
     open_order: Optional[str]
 
 
@@ -299,7 +311,7 @@ class LockModel(BaseModel):
     lock_timestamp: int
     pair: str
     side: str
-    reason: str
+    reason: Optional[str]
 
 
 class Locks(BaseModel):
@@ -455,5 +467,5 @@ class SysInfo(BaseModel):
 
 
 class Health(BaseModel):
-    last_process: datetime
-    last_process_ts: int
+    last_process: Optional[datetime]
+    last_process_ts: Optional[int]
