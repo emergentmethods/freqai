@@ -705,11 +705,11 @@ class PerformanceTracker:
         from scipy.signal import argrelextrema
 
         target_min_idx = argrelextrema(
-            self.historic_predictions['close_price'].values, np.less,
+            self.historic_predictions['low_price'].values, np.less,
             order=self.label_period_candles)[0]
         df_pred_targ['target_min'].iloc[target_min_idx] = 1
         target_max_idx = argrelextrema(
-            self.historic_predictions['close_price'].values, np.greater,
+            self.historic_predictions['high_price'].values, np.greater,
             order=self.label_period_candles)[0]
         df_pred_targ['target_max'].iloc[target_max_idx] = 1
 
