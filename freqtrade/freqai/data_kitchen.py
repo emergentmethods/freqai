@@ -971,7 +971,10 @@ class FreqaiDataKitchen:
         Modify training weights to emphasize unbalanced target labels, i.e., when one "class" (not
         exclusive to classification targets) is more numerous than the other.
         """
-        balance_weights = labels.abs().values.ravel()
+        # FIXME hard code the label to always take first defined label
+        label = self.label_list[0]
+        logger.info(f"using {label} to balance the weights")
+        balance_weights = labels[label].abs().values.ravel()
         weights_balanced = weights + balance_weights
         scaled_weights = (weights_balanced - weights_balanced.min()) / \
             (weights_balanced.max() - weights_balanced.min())
