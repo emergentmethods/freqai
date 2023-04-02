@@ -149,6 +149,9 @@ class FreqaiDataKitchen:
         else:
             weights = np.ones(len(filtered_dataframe))
 
+        if feat_dict.get("balance_weights", False):
+            weights = self.balance_training_weights(labels, weights)
+
         if self.freqai_config.get('data_split_parameters', {}).get('test_size', 0.1) != 0:
             (
                 train_features,
@@ -962,6 +965,17 @@ class FreqaiDataKitchen:
         wfactor = self.config["freqai"]["feature_parameters"]["weight_factor"]
         weights = np.exp(-np.arange(num_weights) / (wfactor * num_weights))[::-1]
         return weights
+
+    def balance_training_weights(self, labels: DataFrame, weights: npt.ArrayLike) -> npt.ArrayLike:
+        """
+        Modify training weights to emphasize unbalanced target labels, i.e., when one "class" (not
+        exclusive to classification targets) is more numerous than the other.
+        """
+        balance_weights = labels.abs().values.ravel()
+        weights_balanced = weights + balance_weights
+        scaled_weights = (weights_balanced - weights_balanced.min()) / \
+            (weights_balanced.max() - weights_balanced.min())
+        return scaled_weights
 
     def get_predictions_to_append(self, predictions: DataFrame,
                                   do_predict: npt.ArrayLike,
