@@ -9,7 +9,6 @@ from unittest.mock import MagicMock, PropertyMock
 import numpy as np
 import pandas as pd
 import pytest
-from arrow import Arrow
 
 from freqtrade import constants
 from freqtrade.commands.optimize_commands import setup_optimize_configuration, start_backtesting
@@ -26,6 +25,7 @@ from freqtrade.optimize.backtest_caching import get_strategy_run_id
 from freqtrade.optimize.backtesting import Backtesting
 from freqtrade.persistence import LocalTrade, Trade
 from freqtrade.resolvers import StrategyResolver
+from freqtrade.util.datetime_helpers import dt_utc
 from tests.conftest import (CURRENT_TEST_STRATEGY, EXMS, get_args, log_has, log_has_re,
                             patch_exchange, patched_configuration_load_config_file)
 
@@ -344,9 +344,9 @@ def test_backtest_abort(default_conf, mocker, testdatadir) -> None:
     assert backtesting.progress.progress == 0
 
 
-def test_backtesting_start(default_conf, mocker, testdatadir, caplog) -> None:
+def test_backtesting_start(default_conf, mocker, caplog) -> None:
     def get_timerange(input1):
-        return Arrow(2017, 11, 14, 21, 17), Arrow(2017, 11, 14, 22, 59)
+        return dt_utc(2017, 11, 14, 21, 17), dt_utc(2017, 11, 14, 22, 59)
 
     mocker.patch('freqtrade.data.history.get_timerange', get_timerange)
     patch_exchange(mocker)
@@ -354,7 +354,7 @@ def test_backtesting_start(default_conf, mocker, testdatadir, caplog) -> None:
     mocker.patch('freqtrade.optimize.backtesting.generate_backtest_stats')
     mocker.patch('freqtrade.optimize.backtesting.show_backtest_results')
     sbs = mocker.patch('freqtrade.optimize.backtesting.store_backtest_stats')
-    sbc = mocker.patch('freqtrade.optimize.backtesting.store_backtest_signal_candles')
+    sbc = mocker.patch('freqtrade.optimize.backtesting.store_backtest_analysis_results')
     mocker.patch('freqtrade.plugins.pairlistmanager.PairListManager.whitelist',
                  PropertyMock(return_value=['UNITTEST/BTC']))
 
@@ -367,6 +367,7 @@ def test_backtesting_start(default_conf, mocker, testdatadir, caplog) -> None:
     backtesting = Backtesting(default_conf)
     backtesting._set_strategy(backtesting.strategylist[0])
     backtesting.strategy.bot_loop_start = MagicMock()
+    backtesting.strategy.bot_start = MagicMock()
     backtesting.start()
     # check the logs, that will contain the backtest result
     exists = [
@@ -376,14 +377,15 @@ def test_backtesting_start(default_conf, mocker, testdatadir, caplog) -> None:
     for line in exists:
         assert log_has(line, caplog)
     assert backtesting.strategy.dp._pairlists is not None
-    assert backtesting.strategy.bot_loop_start.call_count == 1
+    assert backtesting.strategy.bot_start.call_count == 1
+    assert backtesting.strategy.bot_loop_start.call_count == 0
     assert sbs.call_count == 1
     assert sbc.call_count == 1
 
 
 def test_backtesting_start_no_data(default_conf, mocker, caplog, testdatadir) -> None:
     def get_timerange(input1):
-        return Arrow(2017, 11, 14, 21, 17), Arrow(2017, 11, 14, 22, 59)
+        return dt_utc(2017, 11, 14, 21, 17), dt_utc(2017, 11, 14, 22, 59)
 
     mocker.patch('freqtrade.data.history.history_utils.load_pair_history',
                  MagicMock(return_value=pd.DataFrame()))
@@ -708,11 +710,11 @@ def test_backtest_one(default_conf, fee, mocker, testdatadir) -> None:
          'stake_amount': [0.001, 0.001],
          'max_stake_amount': [0.001, 0.001],
          'amount': [0.00957442, 0.0097064],
-         'open_date': pd.to_datetime([Arrow(2018, 1, 29, 18, 40, 0).datetime,
-                                      Arrow(2018, 1, 30, 3, 30, 0).datetime], utc=True
+         'open_date': pd.to_datetime([dt_utc(2018, 1, 29, 18, 40, 0),
+                                      dt_utc(2018, 1, 30, 3, 30, 0)], utc=True
                                      ),
-         'close_date': pd.to_datetime([Arrow(2018, 1, 29, 22, 35, 0).datetime,
-                                       Arrow(2018, 1, 30, 4, 10, 0).datetime], utc=True),
+         'close_date': pd.to_datetime([dt_utc(2018, 1, 29, 22, 35, 0),
+                                       dt_utc(2018, 1, 30, 4, 10, 0)], utc=True),
          'open_rate': [0.104445, 0.10302485],
          'close_rate': [0.104969, 0.103541],
          'fee_open': [0.0025, 0.0025],

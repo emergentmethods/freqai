@@ -2,14 +2,18 @@
 Exchange support utils
 """
 from datetime import datetime, timedelta, timezone
-from math import ceil
+from math import ceil, floor
 from typing import Any, Dict, List, Optional, Tuple
 
 import ccxt
-from ccxt import ROUND_DOWN, ROUND_UP, TICK_SIZE, TRUNCATE, decimal_to_precision
+from ccxt import (DECIMAL_PLACES, ROUND, ROUND_DOWN, ROUND_UP, SIGNIFICANT_DIGITS, TICK_SIZE,
+                  TRUNCATE, decimal_to_precision)
 
-from freqtrade.exchange.common import BAD_EXCHANGES, EXCHANGE_HAS_OPTIONAL, EXCHANGE_HAS_REQUIRED
+from freqtrade.exchange.common import (BAD_EXCHANGES, EXCHANGE_HAS_OPTIONAL, EXCHANGE_HAS_REQUIRED,
+                                       SUPPORTED_EXCHANGES)
+from freqtrade.types import ValidExchangesType
 from freqtrade.util import FtPrecise
+from freqtrade.util.datetime_helpers import dt_from_ts, dt_ts
 
 
 CcxtModuleType = Any
@@ -53,14 +57,41 @@ def validate_exchange(exchange: str) -> Tuple[bool, str]:
     return True, ''
 
 
-def validate_exchanges(all_exchanges: bool) -> List[Tuple[str, bool, str]]:
+def _build_exchange_list_entry(
+        exchange_name: str, exchangeClasses: Dict[str, Any]) -> ValidExchangesType:
+    valid, comment = validate_exchange(exchange_name)
+    result: ValidExchangesType = {
+        'name': exchange_name,
+        'valid': valid,
+        'supported': exchange_name.lower() in SUPPORTED_EXCHANGES,
+        'comment': comment,
+        'trade_modes': [{'trading_mode': 'spot', 'margin_mode': ''}],
+    }
+    if resolved := exchangeClasses.get(exchange_name.lower()):
+        supported_modes = [{'trading_mode': 'spot', 'margin_mode': ''}] + [
+            {'trading_mode': tm.value, 'margin_mode': mm.value}
+            for tm, mm in resolved['class']._supported_trading_mode_margin_pairs
+        ]
+        result.update({
+            'trade_modes': supported_modes,
+        })
+
+    return result
+
+
+def list_available_exchanges(all_exchanges: bool) -> List[ValidExchangesType]:
     """
     :return: List of tuples with exchangename, valid, reason.
     """
     exchanges = ccxt_exchanges() if all_exchanges else available_exchanges()
-    exchanges_valid = [
-        (e, *validate_exchange(e)) for e in exchanges
+    from freqtrade.resolvers.exchange_resolver import ExchangeResolver
+
+    subclassed = {e['name'].lower(): e for e in ExchangeResolver.search_all_objects({}, False)}
+
+    exchanges_valid: List[ValidExchangesType] = [
+        _build_exchange_list_entry(e, subclassed) for e in exchanges
     ]
+
     return exchanges_valid
 
 
@@ -98,9 +129,8 @@ def timeframe_to_prev_date(timeframe: str, date: Optional[datetime] = None) -> d
     if not date:
         date = datetime.now(timezone.utc)
 
-    new_timestamp = ccxt.Exchange.round_timeframe(timeframe, date.timestamp() * 1000,
-                                                  ROUND_DOWN) // 1000
-    return datetime.fromtimestamp(new_timestamp, tz=timezone.utc)
+    new_timestamp = ccxt.Exchange.round_timeframe(timeframe, dt_ts(date), ROUND_DOWN) // 1000
+    return dt_from_ts(new_timestamp)
 
 
 def timeframe_to_next_date(timeframe: str, date: Optional[datetime] = None) -> datetime:
@@ -112,9 +142,8 @@ def timeframe_to_next_date(timeframe: str, date: Optional[datetime] = None) -> d
     """
     if not date:
         date = datetime.now(timezone.utc)
-    new_timestamp = ccxt.Exchange.round_timeframe(timeframe, date.timestamp() * 1000,
-                                                  ROUND_UP) // 1000
-    return datetime.fromtimestamp(new_timestamp, tz=timezone.utc)
+    new_timestamp = ccxt.Exchange.round_timeframe(timeframe, dt_ts(date), ROUND_UP) // 1000
+    return dt_from_ts(new_timestamp)
 
 
 def date_minus_candles(
@@ -219,35 +248,51 @@ def amount_to_contract_precision(
     return amount
 
 
-def price_to_precision(price: float, price_precision: Optional[float],
-                       precisionMode: Optional[int]) -> float:
+def price_to_precision(
+    price: float,
+    price_precision: Optional[float],
+    precisionMode: Optional[int],
+    *,
+    rounding_mode: int = ROUND,
+) -> float:
     """
-    Returns the price rounded up to the precision the Exchange accepts.
+    Returns the price rounded to the precision the Exchange accepts.
     Partial Re-implementation of ccxt internal method decimal_to_precision(),
-    which does not support rounding up
+    which does not support rounding up.
+    For stoploss calculations, must use ROUND_UP for longs, and ROUND_DOWN for shorts.
+
     TODO: If ccxt supports ROUND_UP for decimal_to_precision(), we could remove this and
     align with amount_to_precision().
-    !!! Rounds up
     :param price: price to convert
     :param price_precision: price precision to use. Used from markets[pair]['precision']['price']
     :param precisionMode: precision mode to use. Should be used from precisionMode
                           one of ccxt's DECIMAL_PLACES, SIGNIFICANT_DIGITS, or TICK_SIZE
+    :param rounding_mode: rounding mode to use. Defaults to ROUND
     :return: price rounded up to the precision the Exchange accepts
-
     """
     if price_precision is not None and precisionMode is not None:
-        # price = float(decimal_to_precision(price, rounding_mode=ROUND,
-        #                                    precision=price_precision,
-        #                                    counting_mode=self.precisionMode,
-        #                                    ))
         if precisionMode == TICK_SIZE:
+            if rounding_mode == ROUND:
+                ticks = price / price_precision
+                rounded_ticks = round(ticks)
+                return rounded_ticks * price_precision
             precision = FtPrecise(price_precision)
             price_str = FtPrecise(price)
             missing = price_str % precision
             if not missing == FtPrecise("0"):
-                price = round(float(str(price_str - missing + precision)), 14)
-        else:
-            symbol_prec = price_precision
-            big_price = price * pow(10, symbol_prec)
-            price = ceil(big_price) / pow(10, symbol_prec)
+                return round(float(str(price_str - missing + precision)), 14)
+            return price
+        elif precisionMode in (SIGNIFICANT_DIGITS, DECIMAL_PLACES):
+            ndigits = round(price_precision)
+            if rounding_mode == ROUND:
+                return round(price, ndigits)
+            ticks = price * (10**ndigits)
+            if rounding_mode == ROUND_UP:
+                return ceil(ticks) / (10**ndigits)
+            if rounding_mode == TRUNCATE:
+                return int(ticks) / (10**ndigits)
+            if rounding_mode == ROUND_DOWN:
+                return floor(ticks) / (10**ndigits)
+            raise ValueError(f"Unknown rounding_mode {rounding_mode}")
+        raise ValueError(f"Unknown precisionMode {precisionMode}")
     return price

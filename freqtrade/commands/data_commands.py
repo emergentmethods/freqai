@@ -52,7 +52,7 @@ def start_download_data(args: Dict[str, Any]) -> None:
     pairs_not_available: List[str] = []
 
     # Init exchange
-    exchange = ExchangeResolver.load_exchange(config['exchange']['name'], config, validate=False)
+    exchange = ExchangeResolver.load_exchange(config, validate=False)
     markets = [p for p, m in exchange.markets.items() if market_is_active(m)
                or config.get('include_inactive')]
 
@@ -125,7 +125,7 @@ def start_convert_trades(args: Dict[str, Any]) -> None:
             "Please check the documentation on how to configure this.")
 
     # Init exchange
-    exchange = ExchangeResolver.load_exchange(config['exchange']['name'], config, validate=False)
+    exchange = ExchangeResolver.load_exchange(config, validate=False)
     # Manual validations of relevant settings
     if not config['exchange'].get('skip_pair_validation', False):
         exchange.validate_pairs(config['pairs'])
@@ -204,11 +204,14 @@ def start_list_data(args: Dict[str, Any]) -> None:
             pair, timeframe, candle_type,
             *dhc.ohlcv_data_min_max(pair, timeframe, candle_type)
         ) for pair, timeframe, candle_type in paircombs]
+
         print(tabulate([
             (pair, timeframe, candle_type,
                 start.strftime(DATETIME_PRINT_FORMAT),
                 end.strftime(DATETIME_PRINT_FORMAT))
-            for pair, timeframe, candle_type, start, end in paircombs1
+            for pair, timeframe, candle_type, start, end in sorted(
+                paircombs1,
+                key=lambda x: (x[0], timeframe_to_minutes(x[1]), x[2]))
             ],
             headers=("Pair", "Timeframe", "Type", 'From', 'To'),
             tablefmt='psql', stralign='right'))

@@ -5,20 +5,21 @@ import logging
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from math import isclose
-from typing import Any, ClassVar, Dict, List, Optional, cast
+from typing import Any, ClassVar, Dict, List, Optional, Sequence, cast
 
-from sqlalchemy import Enum, Float, ForeignKey, Integer, String, UniqueConstraint, desc, func
-from sqlalchemy.orm import (Mapped, Query, QueryPropertyDescriptor, lazyload, mapped_column,
-                            relationship)
+from sqlalchemy import (Enum, Float, ForeignKey, Integer, ScalarResult, Select, String,
+                        UniqueConstraint, desc, func, select)
+from sqlalchemy.orm import Mapped, lazyload, mapped_column, relationship, validates
 
-from freqtrade.constants import (DATETIME_PRINT_FORMAT, MATH_CLOSE_PREC, NON_OPEN_EXCHANGE_STATES,
-                                 BuySell, LongShort)
+from freqtrade.constants import (CUSTOM_TAG_MAX_LENGTH, DATETIME_PRINT_FORMAT, MATH_CLOSE_PREC,
+                                 NON_OPEN_EXCHANGE_STATES, BuySell, LongShort)
 from freqtrade.enums import ExitType, TradingMode
 from freqtrade.exceptions import DependencyException, OperationalException
-from freqtrade.exchange import amount_to_contract_precision, price_to_precision
+from freqtrade.exchange import (ROUND_DOWN, ROUND_UP, amount_to_contract_precision,
+                                price_to_precision)
 from freqtrade.leverage import interest
 from freqtrade.persistence.base import ModelBase, SessionType
-from freqtrade.util import FtPrecise
+from freqtrade.util import FtPrecise, dt_now
 
 
 logger = logging.getLogger(__name__)
@@ -36,8 +37,7 @@ class Order(ModelBase):
     Mirrors CCXT Order structure
     """
     __tablename__ = 'orders'
-    query: ClassVar[QueryPropertyDescriptor]
-    _session: ClassVar[SessionType]
+    session: ClassVar[SessionType]
 
     # Uniqueness should be ensured over pair, order_id
     # its likely that order_id is unique per Pair on some exchanges.
@@ -68,7 +68,7 @@ class Order(ModelBase):
     remaining: Mapped[Optional[float]] = mapped_column(Float(), nullable=True)
     cost: Mapped[Optional[float]] = mapped_column(Float(), nullable=True)
     stop_price: Mapped[Optional[float]] = mapped_column(Float(), nullable=True)
-    order_date: Mapped[datetime] = mapped_column(nullable=True, default=datetime.utcnow)
+    order_date: Mapped[datetime] = mapped_column(nullable=True, default=dt_now)
     order_filled_date: Mapped[Optional[datetime]] = mapped_column(nullable=True)
     order_update_date: Mapped[Optional[datetime]] = mapped_column(nullable=True)
     funding_fee: Mapped[Optional[float]] = mapped_column(Float(), nullable=True)
@@ -97,7 +97,7 @@ class Order(ModelBase):
 
     @property
     def safe_filled(self) -> float:
-        return self.filled if self.filled is not None else self.amount or 0.0
+        return self.filled if self.filled is not None else 0.0
 
     @property
     def safe_cost(self) -> float:
@@ -158,7 +158,7 @@ class Order(ModelBase):
                 self.order_filled_date = datetime.now(timezone.utc)
         self.order_update_date = datetime.now(timezone.utc)
 
-    def to_ccxt_object(self) -> Dict[str, Any]:
+    def to_ccxt_object(self, stopPriceName: str = 'stopPrice') -> Dict[str, Any]:
         order: Dict[str, Any] = {
             'id': self.order_id,
             'symbol': self.ft_pair,
@@ -170,7 +170,6 @@ class Order(ModelBase):
             'side': self.ft_order_side,
             'filled': self.filled,
             'remaining': self.remaining,
-            'stopPrice': self.stop_price,
             'datetime': self.order_date_utc.strftime('%Y-%m-%dT%H:%M:%S.%f'),
             'timestamp': int(self.order_date_utc.timestamp() * 1000),
             'status': self.status,
@@ -178,7 +177,11 @@ class Order(ModelBase):
             'info': {},
         }
         if self.ft_order_side == 'stoploss':
-            order['ft_order_type'] = 'stoploss'
+            order.update({
+                stopPriceName: self.stop_price,
+                'ft_order_type': 'stoploss',
+            })
+
         return order
 
     def to_json(self, entry_side: str, minified: bool = False) -> Dict[str, Any]:
@@ -263,12 +266,12 @@ class Order(ModelBase):
         return o
 
     @staticmethod
-    def get_open_orders() -> List['Order']:
+    def get_open_orders() -> Sequence['Order']:
         """
         Retrieve open orders from the database
         :return: List of open orders
         """
-        return Order.query.filter(Order.ft_is_open.is_(True)).all()
+        return Order.session.scalars(select(Order).filter(Order.ft_is_open.is_(True))).all()
 
     @staticmethod
     def order_by_id(order_id: str) -> Optional['Order']:
@@ -276,7 +279,7 @@ class Order(ModelBase):
         Retrieve order based on order_id
         :return: Order or None
         """
-        return Order.query.filter(Order.order_id == order_id).first()
+        return Order.session.scalars(select(Order).filter(Order.order_id == order_id)).first()
 
 
 class LocalTrade():
@@ -422,7 +425,7 @@ class LocalTrade():
 
     @property
     def close_date_utc(self):
-        return self.close_date.replace(tzinfo=timezone.utc)
+        return self.close_date.replace(tzinfo=timezone.utc) if self.close_date else None
 
     @property
     def entry_side(self) -> str:
@@ -561,6 +564,9 @@ class LocalTrade():
             'trading_mode': self.trading_mode,
             'funding_fees': self.funding_fees,
             'open_order_id': self.open_order_id,
+            'amount_precision': self.amount_precision,
+            'price_precision': self.price_precision,
+            'precision_mode': self.precision_mode,
             'orders': orders,
         }
 
@@ -595,7 +601,8 @@ class LocalTrade():
         """
         Method used internally to set self.stop_loss.
         """
-        stop_loss_norm = price_to_precision(stop_loss, self.price_precision, self.precision_mode)
+        stop_loss_norm = price_to_precision(stop_loss, self.price_precision, self.precision_mode,
+                                            rounding_mode=ROUND_DOWN if self.is_short else ROUND_UP)
         if not self.stop_loss:
             self.initial_stop_loss = stop_loss_norm
         self.stop_loss = stop_loss_norm
@@ -626,7 +633,8 @@ class LocalTrade():
         if self.initial_stop_loss_pct is None or refresh:
             self.__set_stop_loss(new_loss, stoploss)
             self.initial_stop_loss = price_to_precision(
-                new_loss, self.price_precision, self.precision_mode)
+                new_loss, self.price_precision, self.precision_mode,
+                rounding_mode=ROUND_DOWN if self.is_short else ROUND_UP)
             self.initial_stop_loss_pct = -1 * abs(stoploss)
 
         # evaluate if the stop loss needs to be updated
@@ -690,21 +698,27 @@ class LocalTrade():
             else:
                 logger.warning(
                     f'Got different open_order_id {self.open_order_id} != {order.order_id}')
-            amount_tr = amount_to_contract_precision(self.amount, self.amount_precision,
-                                                     self.precision_mode, self.contract_size)
-            if isclose(order.safe_amount_after_fee, amount_tr, abs_tol=MATH_CLOSE_PREC):
-                self.close(order.safe_price)
-            else:
-                self.recalc_trade_from_orders()
-        elif order.ft_order_side == 'stoploss' and order.status not in ('canceled', 'open'):
+
+        elif order.ft_order_side == 'stoploss' and order.status not in ('open', ):
             self.stoploss_order_id = None
             self.close_rate_requested = self.stop_loss
             self.exit_reason = ExitType.STOPLOSS_ON_EXCHANGE.value
-            if self.is_open:
+            if self.is_open and order.safe_filled > 0:
                 logger.info(f'{order.order_type.upper()} is hit for {self}.')
-            self.close(order.safe_price)
         else:
             raise ValueError(f'Unknown order type: {order.order_type}')
+
+        if order.ft_order_side != self.entry_side:
+            amount_tr = amount_to_contract_precision(self.amount, self.amount_precision,
+                                                     self.precision_mode, self.contract_size)
+            if (
+                isclose(order.safe_amount_after_fee, amount_tr, abs_tol=MATH_CLOSE_PREC)
+                or order.safe_amount_after_fee > amount_tr
+            ):
+                self.close(order.safe_price)
+            else:
+                self.recalc_trade_from_orders()
+
         Trade.commit()
 
     def close(self, rate: float, *, show_msg: bool = True) -> None:
@@ -1153,7 +1167,9 @@ class LocalTrade():
         get open trade count
         """
         if Trade.use_db:
-            return Trade.query.filter(Trade.is_open.is_(True)).count()
+            return Trade.session.execute(
+                select(func.count(Trade.id)).filter(Trade.is_open.is_(True))
+            ).scalar_one()
         else:
             return LocalTrade.bt_open_open_trade_count
 
@@ -1186,8 +1202,7 @@ class Trade(ModelBase, LocalTrade):
     Note: Fields must be aligned with LocalTrade class
     """
     __tablename__ = 'trades'
-    query: ClassVar[QueryPropertyDescriptor]
-    _session: ClassVar[SessionType]
+    session: ClassVar[SessionType]
 
     use_db: bool = True
 
@@ -1250,11 +1265,13 @@ class Trade(ModelBase, LocalTrade):
         Float(), nullable=True, default=0.0)  # type: ignore
     # Lowest price reached
     min_rate: Mapped[Optional[float]] = mapped_column(Float(), nullable=True)  # type: ignore
-    exit_reason: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)  # type: ignore
+    exit_reason: Mapped[Optional[str]] = mapped_column(
+        String(CUSTOM_TAG_MAX_LENGTH), nullable=True)  # type: ignore
     exit_order_status: Mapped[Optional[str]] = mapped_column(
         String(100), nullable=True)  # type: ignore
     strategy: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)  # type: ignore
-    enter_tag: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)  # type: ignore
+    enter_tag: Mapped[Optional[str]] = mapped_column(
+        String(CUSTOM_TAG_MAX_LENGTH), nullable=True)  # type: ignore
     timeframe: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)  # type: ignore
 
     trading_mode: Mapped[TradingMode] = mapped_column(
@@ -1284,21 +1301,28 @@ class Trade(ModelBase, LocalTrade):
         self.realized_profit = 0
         self.recalc_open_trade_value()
 
+    @validates('enter_tag', 'exit_reason')
+    def validate_string_len(self, key, value):
+        max_len = getattr(self.__class__, key).prop.columns[0].type.length
+        if value and len(value) > max_len:
+            return value[:max_len]
+        return value
+
     def delete(self) -> None:
 
         for order in self.orders:
-            Order.query.session.delete(order)
+            Order.session.delete(order)
 
-        Trade.query.session.delete(self)
+        Trade.session.delete(self)
         Trade.commit()
 
     @staticmethod
     def commit():
-        Trade.query.session.commit()
+        Trade.session.commit()
 
     @staticmethod
     def rollback():
-        Trade.query.session.rollback()
+        Trade.session.rollback()
 
     @staticmethod
     def get_trades_proxy(*, pair: Optional[str] = None, is_open: Optional[bool] = None,
@@ -1332,7 +1356,7 @@ class Trade(ModelBase, LocalTrade):
             )
 
     @staticmethod
-    def get_trades(trade_filter=None, include_orders: bool = True) -> Query['Trade']:
+    def get_trades_query(trade_filter=None, include_orders: bool = True) -> Select:
         """
         Helper function to query Trades using filters.
         NOTE: Not supported in Backtesting.
@@ -1347,9 +1371,9 @@ class Trade(ModelBase, LocalTrade):
         if trade_filter is not None:
             if not isinstance(trade_filter, list):
                 trade_filter = [trade_filter]
-            this_query = Trade.query.filter(*trade_filter)
+            this_query = select(Trade).filter(*trade_filter)
         else:
-            this_query = Trade.query
+            this_query = select(Trade)
         if not include_orders:
             # Don't load order relations
             # Consider using noload or raiseload instead of lazyload
@@ -1357,12 +1381,25 @@ class Trade(ModelBase, LocalTrade):
         return this_query
 
     @staticmethod
+    def get_trades(trade_filter=None, include_orders: bool = True) -> ScalarResult['Trade']:
+        """
+        Helper function to query Trades using filters.
+        NOTE: Not supported in Backtesting.
+        :param trade_filter: Optional filter to apply to trades
+                             Can be either a Filter object, or a List of filters
+                             e.g. `(trade_filter=[Trade.id == trade_id, Trade.is_open.is_(True),])`
+                             e.g. `(trade_filter=Trade.id == trade_id)`
+        :return: unsorted query object
+        """
+        return Trade.session.scalars(Trade.get_trades_query(trade_filter, include_orders))
+
+    @staticmethod
     def get_open_order_trades() -> List['Trade']:
         """
         Returns all open trades
         NOTE: Not supported in Backtesting.
         """
-        return Trade.get_trades(Trade.open_order_id.isnot(None)).all()
+        return cast(List[Trade], Trade.get_trades(Trade.open_order_id.isnot(None)).all())
 
     @staticmethod
     def get_open_trades_without_assigned_fees():
@@ -1392,11 +1429,12 @@ class Trade(ModelBase, LocalTrade):
         Retrieves total realized profit
         """
         if Trade.use_db:
-            total_profit = Trade.query.with_entities(
-                func.sum(Trade.close_profit_abs)).filter(Trade.is_open.is_(False)).scalar()
+            total_profit: float = Trade.session.execute(
+                select(func.sum(Trade.close_profit_abs)).filter(Trade.is_open.is_(False))
+            ).scalar_one()
         else:
-            total_profit = sum(
-                t.close_profit_abs for t in LocalTrade.get_trades_proxy(is_open=False))
+            total_profit = sum(t.close_profit_abs  # type: ignore
+                               for t in LocalTrade.get_trades_proxy(is_open=False))
         return total_profit or 0
 
     @staticmethod
@@ -1406,8 +1444,9 @@ class Trade(ModelBase, LocalTrade):
         in stake currency
         """
         if Trade.use_db:
-            total_open_stake_amount = Trade.query.with_entities(
-                func.sum(Trade.stake_amount)).filter(Trade.is_open.is_(True)).scalar()
+            total_open_stake_amount = Trade.session.scalar(
+                select(func.sum(Trade.stake_amount)).filter(Trade.is_open.is_(True))
+            )
         else:
             total_open_stake_amount = sum(
                 t.stake_amount for t in LocalTrade.get_trades_proxy(is_open=True))
@@ -1423,15 +1462,18 @@ class Trade(ModelBase, LocalTrade):
         if minutes:
             start_date = datetime.now(timezone.utc) - timedelta(minutes=minutes)
             filters.append(Trade.close_date >= start_date)
-        pair_rates = Trade.query.with_entities(
-            Trade.pair,
-            func.sum(Trade.close_profit).label('profit_sum'),
-            func.sum(Trade.close_profit_abs).label('profit_sum_abs'),
-            func.count(Trade.pair).label('count')
-        ).filter(*filters)\
-            .group_by(Trade.pair) \
-            .order_by(desc('profit_sum_abs')) \
-            .all()
+
+        pair_rates = Trade.session.execute(
+            select(
+                Trade.pair,
+                func.sum(Trade.close_profit).label('profit_sum'),
+                func.sum(Trade.close_profit_abs).label('profit_sum_abs'),
+                func.count(Trade.pair).label('count')
+            ).filter(*filters)
+            .group_by(Trade.pair)
+            .order_by(desc('profit_sum_abs'))
+            ).all()
+
         return [
             {
                 'pair': pair,
@@ -1456,15 +1498,16 @@ class Trade(ModelBase, LocalTrade):
         if (pair is not None):
             filters.append(Trade.pair == pair)
 
-        enter_tag_perf = Trade.query.with_entities(
-            Trade.enter_tag,
-            func.sum(Trade.close_profit).label('profit_sum'),
-            func.sum(Trade.close_profit_abs).label('profit_sum_abs'),
-            func.count(Trade.pair).label('count')
-        ).filter(*filters)\
-            .group_by(Trade.enter_tag) \
-            .order_by(desc('profit_sum_abs')) \
-            .all()
+        enter_tag_perf = Trade.session.execute(
+            select(
+                Trade.enter_tag,
+                func.sum(Trade.close_profit).label('profit_sum'),
+                func.sum(Trade.close_profit_abs).label('profit_sum_abs'),
+                func.count(Trade.pair).label('count')
+            ).filter(*filters)
+            .group_by(Trade.enter_tag)
+            .order_by(desc('profit_sum_abs'))
+        ).all()
 
         return [
             {
@@ -1488,16 +1531,16 @@ class Trade(ModelBase, LocalTrade):
         filters: List = [Trade.is_open.is_(False)]
         if (pair is not None):
             filters.append(Trade.pair == pair)
-
-        sell_tag_perf = Trade.query.with_entities(
-            Trade.exit_reason,
-            func.sum(Trade.close_profit).label('profit_sum'),
-            func.sum(Trade.close_profit_abs).label('profit_sum_abs'),
-            func.count(Trade.pair).label('count')
-        ).filter(*filters)\
-            .group_by(Trade.exit_reason) \
-            .order_by(desc('profit_sum_abs')) \
-            .all()
+        sell_tag_perf = Trade.session.execute(
+            select(
+                Trade.exit_reason,
+                func.sum(Trade.close_profit).label('profit_sum'),
+                func.sum(Trade.close_profit_abs).label('profit_sum_abs'),
+                func.count(Trade.pair).label('count')
+            ).filter(*filters)
+            .group_by(Trade.exit_reason)
+            .order_by(desc('profit_sum_abs'))
+        ).all()
 
         return [
             {
@@ -1521,18 +1564,18 @@ class Trade(ModelBase, LocalTrade):
         filters: List = [Trade.is_open.is_(False)]
         if (pair is not None):
             filters.append(Trade.pair == pair)
-
-        mix_tag_perf = Trade.query.with_entities(
-            Trade.id,
-            Trade.enter_tag,
-            Trade.exit_reason,
-            func.sum(Trade.close_profit).label('profit_sum'),
-            func.sum(Trade.close_profit_abs).label('profit_sum_abs'),
-            func.count(Trade.pair).label('count')
-        ).filter(*filters)\
-            .group_by(Trade.id) \
-            .order_by(desc('profit_sum_abs')) \
-            .all()
+        mix_tag_perf = Trade.session.execute(
+            select(
+                Trade.id,
+                Trade.enter_tag,
+                Trade.exit_reason,
+                func.sum(Trade.close_profit).label('profit_sum'),
+                func.sum(Trade.close_profit_abs).label('profit_sum_abs'),
+                func.count(Trade.pair).label('count')
+            ).filter(*filters)
+            .group_by(Trade.id)
+            .order_by(desc('profit_sum_abs'))
+        ).all()
 
         return_list: List[Dict] = []
         for id, enter_tag, exit_reason, profit, profit_abs, count in mix_tag_perf:
@@ -1568,11 +1611,15 @@ class Trade(ModelBase, LocalTrade):
         NOTE: Not supported in Backtesting.
         :returns: Tuple containing (pair, profit_sum)
         """
-        best_pair = Trade.query.with_entities(
-            Trade.pair, func.sum(Trade.close_profit).label('profit_sum')
-        ).filter(Trade.is_open.is_(False) & (Trade.close_date >= start_date)) \
-            .group_by(Trade.pair) \
-            .order_by(desc('profit_sum')).first()
+        best_pair = Trade.session.execute(
+            select(
+                Trade.pair,
+                func.sum(Trade.close_profit).label('profit_sum')
+            ).filter(Trade.is_open.is_(False) & (Trade.close_date >= start_date))
+            .group_by(Trade.pair)
+            .order_by(desc('profit_sum'))
+        ).first()
+
         return best_pair
 
     @staticmethod
@@ -1582,12 +1629,13 @@ class Trade(ModelBase, LocalTrade):
         NOTE: Not supported in Backtesting.
         :returns: Tuple containing (pair, profit_sum)
         """
-        trading_volume = Order.query.with_entities(
-            func.sum(Order.cost).label('volume')
-        ).filter(
-            Order.order_filled_date >= start_date,
-            Order.status == 'closed'
-        ).scalar()
+        trading_volume = Trade.session.execute(
+            select(
+                func.sum(Order.cost).label('volume')
+            ).filter(
+                Order.order_filled_date >= start_date,
+                Order.status == 'closed'
+            )).scalar_one()
         return trading_volume
 
     @staticmethod
@@ -1636,8 +1684,10 @@ class Trade(ModelBase, LocalTrade):
             stop_loss=data["stop_loss_abs"],
             stop_loss_pct=data["stop_loss_ratio"],
             stoploss_order_id=data["stoploss_order_id"],
-            stoploss_last_update=(datetime.fromtimestamp(data["stoploss_last_update"] // 1000,
-                                  tz=timezone.utc) if data["stoploss_last_update"] else None),
+            stoploss_last_update=(
+                datetime.fromtimestamp(data["stoploss_last_update_timestamp"] // 1000,
+                                       tz=timezone.utc)
+                if data["stoploss_last_update_timestamp"] else None),
             initial_stop_loss=data["initial_stop_loss_abs"],
             initial_stop_loss_pct=data["initial_stop_loss_ratio"],
             min_rate=data["min_rate"],

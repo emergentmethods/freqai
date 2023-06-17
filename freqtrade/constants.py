@@ -8,6 +8,7 @@ from typing import Any, Dict, List, Literal, Tuple
 from freqtrade.enums import CandleType, PriceType, RPCMessageType
 
 
+DOCS_LINK = "https://www.freqtrade.io/en/stable"
 DEFAULT_CONFIG = 'config.json'
 DEFAULT_EXCHANGE = 'bittrex'
 PROCESS_THROTTLE_SECS = 5  # sec
@@ -36,9 +37,10 @@ AVAILABLE_PAIRLISTS = ['StaticPairList', 'VolumePairList', 'ProducerPairList', '
                        'AgeFilter', 'OffsetFilter', 'PerformanceFilter',
                        'PrecisionFilter', 'PriceFilter', 'RangeStabilityFilter',
                        'ShuffleFilter', 'SpreadFilter', 'VolatilityFilter']
-AVAILABLE_PROTECTIONS = ['CooldownPeriod', 'LowProfitPairs', 'MaxDrawdown', 'StoplossGuard']
-AVAILABLE_DATAHANDLERS_TRADES = ['json', 'jsongz', 'hdf5']
-AVAILABLE_DATAHANDLERS = AVAILABLE_DATAHANDLERS_TRADES + ['feather', 'parquet']
+AVAILABLE_PROTECTIONS = ['CooldownPeriod',
+                         'LowProfitPairs', 'MaxDrawdown', 'StoplossGuard']
+AVAILABLE_DATAHANDLERS_TRADES = ['json', 'jsongz', 'hdf5', 'feather']
+AVAILABLE_DATAHANDLERS = AVAILABLE_DATAHANDLERS_TRADES + ['parquet']
 BACKTEST_BREAKDOWNS = ['day', 'week', 'month']
 BACKTEST_CACHE_AGE = ['none', 'day', 'week', 'month']
 BACKTEST_CACHE_DEFAULT = 'day'
@@ -63,6 +65,7 @@ USERPATH_FREQAIMODELS = 'freqaimodels'
 TELEGRAM_SETTING_OPTIONS = ['on', 'off', 'silent']
 WEBHOOK_FORMAT_OPTIONS = ['form', 'json', 'raw']
 FULL_DATAFRAME_THRESHOLD = 100
+CUSTOM_TAG_MAX_LENGTH = 255
 
 ENV_VAR_PREFIX = 'FREQTRADE__'
 
@@ -146,7 +149,6 @@ CONF_SCHEMA = {
             'patternProperties': {
                 '^[0-9.]+$': {'type': 'number'}
             },
-            'minProperties': 1
         },
         'amount_reserve_percent': {'type': 'number', 'minimum': 0.0, 'maximum': 0.5},
         'stoploss': {'type': 'number', 'maximum': 0, 'exclusiveMaximum': True, 'minimum': -1},
@@ -597,7 +599,8 @@ CONF_SCHEMA = {
                         "model_type": {"type": "string", "default": "PPO"},
                         "policy_type": {"type": "string", "default": "MlpPolicy"},
                         "net_arch": {"type": "array", "default": [128, 128]},
-                        "randomize_startinng_position": {"type": "boolean", "default": False},
+                        "randomize_starting_position": {"type": "boolean", "default": False},
+                        "progress_bar": {"type": "boolean", "default": True},
                         "model_reward_parameters": {
                             "type": "object",
                             "properties": {
@@ -687,4 +690,6 @@ BidAsk = Literal['bid', 'ask']
 OBLiteral = Literal['asks', 'bids']
 
 Config = Dict[str, Any]
+# Exchange part of the configuration.
+ExchangeConfig = Dict[str, Any]
 IntOrInf = float

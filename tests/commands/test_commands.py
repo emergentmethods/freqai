@@ -1,12 +1,11 @@
 import json
 import re
-from datetime import datetime
+from datetime import datetime, timedelta
 from io import BytesIO
 from pathlib import Path
 from unittest.mock import MagicMock, PropertyMock
 from zipfile import ZipFile
 
-import arrow
 import pytest
 
 from freqtrade.commands import (start_backtesting_show, start_convert_data, start_convert_trades,
@@ -14,7 +13,8 @@ from freqtrade.commands import (start_backtesting_show, start_convert_data, star
                                 start_hyperopt_show, start_install_ui, start_list_data,
                                 start_list_exchanges, start_list_markets, start_list_strategies,
                                 start_list_timeframes, start_new_strategy, start_show_trades,
-                                start_test_pairlist, start_trading, start_webserver)
+                                start_strategy_update, start_test_pairlist, start_trading,
+                                start_webserver)
 from freqtrade.commands.db_commands import start_convert_db
 from freqtrade.commands.deploy_commands import (clean_ui_subdir, download_and_install_ui,
                                                 get_ui_download_url, read_ui_version)
@@ -24,6 +24,7 @@ from freqtrade.enums import RunMode
 from freqtrade.exceptions import OperationalException
 from freqtrade.persistence.models import init_db
 from freqtrade.persistence.pairlock_middleware import PairLocks
+from freqtrade.util import dt_floor_day, dt_now, dt_utc
 from tests.conftest import (CURRENT_TEST_STRATEGY, EXMS, create_mock_trades, get_args, log_has,
                             log_has_re, patch_exchange, patched_configuration_load_config_file)
 from tests.conftest_trades import MOCK_TRADE_COUNT
@@ -688,7 +689,7 @@ def test_download_data_timerange(mocker, markets):
     start_download_data(pargs)
     assert dl_mock.call_count == 1
     # 20days ago
-    days_ago = arrow.get(arrow.now().shift(days=-20).date()).int_timestamp
+    days_ago = dt_floor_day(dt_now() - timedelta(days=20)).timestamp()
     assert dl_mock.call_args_list[0][1]['timerange'].startts == days_ago
 
     dl_mock.reset_mock()
@@ -703,8 +704,7 @@ def test_download_data_timerange(mocker, markets):
     start_download_data(pargs)
     assert dl_mock.call_count == 1
 
-    assert dl_mock.call_args_list[0][1]['timerange'].startts == arrow.Arrow(
-        2020, 1, 1).int_timestamp
+    assert dl_mock.call_args_list[0][1]['timerange'].startts == int(dt_utc(2020, 1, 1).timestamp())
 
 
 def test_download_data_no_markets(mocker, caplog):
@@ -1546,3 +1546,37 @@ def test_start_convert_db(mocker, fee, tmpdir, caplog):
     start_convert_db(pargs)
 
     assert db_target_file.is_file()
+
+
+def test_start_strategy_updater(mocker, tmpdir):
+    sc_mock = mocker.patch('freqtrade.commands.strategy_utils_commands.start_conversion')
+    teststrats = Path(__file__).parent.parent / 'strategy/strats'
+    args = [
+        "strategy-updater",
+        "--userdir",
+        str(tmpdir),
+        "--strategy-path",
+        str(teststrats),
+    ]
+    pargs = get_args(args)
+    pargs['config'] = None
+    start_strategy_update(pargs)
+    # Number of strategies in the test directory
+    assert sc_mock.call_count == 11
+
+    sc_mock.reset_mock()
+    args = [
+        "strategy-updater",
+        "--userdir",
+        str(tmpdir),
+        "--strategy-path",
+        str(teststrats),
+        "--strategy-list",
+        "StrategyTestV3",
+        "StrategyTestV2"
+    ]
+    pargs = get_args(args)
+    pargs['config'] = None
+    start_strategy_update(pargs)
+    # Number of strategies in the test directory
+    assert sc_mock.call_count == 2

@@ -5,7 +5,6 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from freqtrade.constants import BuySell
 from freqtrade.enums import MarginMode, PriceType, TradingMode
-from freqtrade.exceptions import OperationalException
 from freqtrade.exchange import Exchange
 from freqtrade.misc import safe_value_fallback2
 
@@ -28,11 +27,12 @@ class Gate(Exchange):
         "order_time_in_force": ['GTC', 'IOC'],
         "stoploss_order_types": {"limit": "limit"},
         "stoploss_on_exchange": True,
+        "marketOrderRequiresPrice": True,
     }
 
     _ft_has_futures: Dict = {
         "needs_trading_fees": True,
-        "tickers_have_bid_ask": False,
+        "marketOrderRequiresPrice": False,
         "fee_cost_in_contracts": False,  # Set explicitly to false for clarity
         "order_props_in_contracts": ['amount', 'filled', 'remaining'],
         "stop_price_type_field": "price_type",
@@ -49,14 +49,6 @@ class Gate(Exchange):
         # (TradingMode.FUTURES, MarginMode.CROSS),
         (TradingMode.FUTURES, MarginMode.ISOLATED)
     ]
-
-    def validate_ordertypes(self, order_types: Dict) -> None:
-
-        if self.trading_mode != TradingMode.FUTURES:
-            if any(v == 'market' for k, v in order_types.items()):
-                raise OperationalException(
-                    f'Exchange {self.name} does not support market orders.')
-        super().validate_stop_ordertypes(order_types)
 
     def _get_params(
             self,
@@ -75,8 +67,7 @@ class Gate(Exchange):
         )
         if ordertype == 'market' and self.trading_mode == TradingMode.FUTURES:
             params['type'] = 'market'
-            param = self._ft_has.get('time_in_force_parameter', '')
-            params.update({param: 'IOC'})
+            params.update({'timeInForce': 'IOC'})
         return params
 
     def get_trades_for_order(self, order_id: str, pair: str, since: datetime,

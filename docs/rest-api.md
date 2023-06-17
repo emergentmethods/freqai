@@ -9,9 +9,6 @@ This same command can also be used to update freqUI, should there be a new relea
 
 Once the bot is started in trade / dry-run mode (with `freqtrade trade`) - the UI will be available under the configured port below (usually `http://127.0.0.1:8080`).
 
-!!! info "Alpha release"
-    FreqUI is still considered an alpha release - if you encounter bugs or inconsistencies please open a [FreqUI issue](https://github.com/freqtrade/frequi/issues/new/choose).
-
 !!! Note "developers"
     Developers should not use this method, but instead use the method described in the [freqUI repository](https://github.com/freqtrade/frequi) to get the source-code of freqUI.
 
@@ -137,7 +134,9 @@ python3 scripts/rest_client.py --config rest_config.json <command> [optional par
 | `reload_config` | Reloads the configuration file.
 | `trades` | List last trades. Limited to 500 trades per call.
 | `trade/<tradeid>` | Get specific trade.
-| `delete_trade <trade_id>` | Remove trade from the database. Tries to close open orders. Requires manual handling of this trade on the exchange.
+| `trade/<tradeid>` | DELETE - Remove trade from the database. Tries to close open orders. Requires manual handling of this trade on the exchange.
+| `trade/<tradeid>/open-order` | DELETE - Cancel open order for this trade.
+| `trade/<tradeid>/reload` | GET - Reload a trade from the Exchange. Only works in live, and can potentially help recover a trade that was manually sold on the exchange.
 | `show_config` | Shows part of the current configuration with relevant settings to operation.
 | `logs` | Shows last log messages.
 | `status` | Lists all open trades.

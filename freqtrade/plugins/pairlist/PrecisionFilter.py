@@ -6,6 +6,7 @@ from typing import Any, Dict, Optional
 
 from freqtrade.constants import Config
 from freqtrade.exceptions import OperationalException
+from freqtrade.exchange import ROUND_UP
 from freqtrade.exchange.types import Ticker
 from freqtrade.plugins.pairlist.IPairList import IPairList
 
@@ -45,6 +46,10 @@ class PrecisionFilter(IPairList):
         """
         return f"{self.name} - Filtering untradable pairs."
 
+    @staticmethod
+    def description() -> str:
+        return "Filters low-value coins which would not allow setting stoplosses."
+
     def _validate_pair(self, pair: str, ticker: Optional[Ticker]) -> bool:
         """
         Check if pair has enough room to add a stoploss to avoid "unsellable" buys of very
@@ -61,9 +66,10 @@ class PrecisionFilter(IPairList):
         stop_price = ticker['last'] * self._stoploss
 
         # Adjust stop-prices to precision
-        sp = self._exchange.price_to_precision(pair, stop_price)
+        sp = self._exchange.price_to_precision(pair, stop_price, rounding_mode=ROUND_UP)
 
-        stop_gap_price = self._exchange.price_to_precision(pair, stop_price * 0.99)
+        stop_gap_price = self._exchange.price_to_precision(pair, stop_price * 0.99,
+                                                           rounding_mode=ROUND_UP)
         logger.debug(f"{pair} - {sp} : {stop_gap_price}")
 
         if sp <= stop_gap_price:

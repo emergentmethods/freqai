@@ -9,7 +9,6 @@ from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
-import pandas as pd
 from numpy import nan
 from pandas import DataFrame
 
@@ -28,8 +27,10 @@ from freqtrade.exchange import (amount_to_contract_precision, price_to_precision
 from freqtrade.mixins import LoggingMixin
 from freqtrade.optimize.backtest_caching import get_strategy_run_id
 from freqtrade.optimize.bt_progress import BTProgress
-from freqtrade.optimize.optimize_reports import (generate_backtest_stats, show_backtest_results,
-                                                 store_backtest_signal_candles,
+from freqtrade.optimize.optimize_reports import (generate_backtest_stats, generate_rejected_signals,
+                                                 generate_trade_signal_candles,
+                                                 show_backtest_results,
+                                                 store_backtest_analysis_results,
                                                  store_backtest_stats)
 from freqtrade.persistence import LocalTrade, Order, PairLocks, Trade
 from freqtrade.plugins.pairlistmanager import PairListManager
@@ -84,10 +85,11 @@ class Backtesting:
         self.strategylist: List[IStrategy] = []
         self.all_results: Dict[str, Dict] = {}
         self.processed_dfs: Dict[str, Dict] = {}
+        self.rejected_dict: Dict[str, List] = {}
+        self.rejected_df: Dict[str, Dict] = {}
 
         self._exchange_name = self.config['exchange']['name']
-        self.exchange = ExchangeResolver.load_exchange(
-            self._exchange_name, self.config, load_leverage_tiers=True)
+        self.exchange = ExchangeResolver.load_exchange(self.config, load_leverage_tiers=True)
         self.dataprovider = DataProvider(self.config, self.exchange)
 
         if self.config.get('strategy_list'):
@@ -203,9 +205,10 @@ class Backtesting:
         # since a "perfect" stoploss-exit is assumed anyway
         # And the regular "stoploss" function would not apply to that case
         self.strategy.order_types['stoploss_on_exchange'] = False
+        # Update can_short flag
+        self._can_short = self.trading_mode != TradingMode.SPOT and strategy.can_short
 
         self.strategy.ft_bot_start()
-        strategy_safe_wrapper(self.strategy.bot_loop_start, supress_error=True)()
 
     def _load_protections(self, strategy: IStrategy):
         if self.config.get('enable_protections', False):
@@ -442,10 +445,6 @@ class Backtesting:
                 # Worst case: price ticks tiny bit above open and dives down.
                 stop_rate = row[OPEN_IDX] * (1 - side_1 * abs(
                     (trade.stop_loss_pct or 0.0) / leverage))
-                if is_short:
-                    assert stop_rate > row[LOW_IDX]
-                else:
-                    assert stop_rate < row[HIGH_IDX]
 
             # Limit lower-end to candle low to avoid exits below the low.
             # This still remains "worst case" - but "worst realistic case".
@@ -526,7 +525,7 @@ class Backtesting:
         max_stake = self.exchange.get_max_pair_stake_amount(trade.pair, current_rate)
         stake_available = self.wallets.get_available_stake_amount()
         stake_amount = strategy_safe_wrapper(self.strategy.adjust_trade_position,
-                                             default_retval=None)(
+                                             default_retval=None, supress_error=True)(
             trade=trade,  # type: ignore[arg-type]
             current_time=current_date, current_rate=current_rate,
             current_profit=current_profit, min_stake=min_stake,
@@ -744,7 +743,7 @@ class Backtesting:
                 proposed_leverage=1.0,
                 max_leverage=max_leverage,
                 side=direction, entry_tag=entry_tag,
-            ) if self._can_short else 1.0
+            ) if self.trading_mode != TradingMode.SPOT else 1.0
             # Cap leverage between 1.0 and max_leverage.
             leverage = min(max(leverage, 1.0), max_leverage)
 
@@ -1034,6 +1033,9 @@ class Backtesting:
                                   requested_stake=(
                                     order.safe_remaining * order.ft_price / trade.leverage),
                                   direction='short' if trade.is_short else 'long')
+                # Delete trade if no successful entries happened (if placing the new order failed)
+                if trade.open_order_id is None and trade.nr_of_successful_entries == 0:
+                    return True
                 self.replaced_entry_orders += 1
             else:
                 # assumption: there can't be multiple open entry orders at any given time
@@ -1055,6 +1057,18 @@ class Backtesting:
         if row[DATE_IDX] > current_time:
             return None
         return row
+
+    def _collate_rejected(self, pair, row):
+        """
+        Temporarily store rejected signal information for downstream use in backtesting_analysis
+        """
+        # It could be fun to enable hyperopt mode to write
+        # a loss function to reduce rejected signals
+        if (self.config.get('export', 'none') == 'signals' and
+                self.dataprovider.runmode == RunMode.BACKTEST):
+            if pair not in self.rejected_dict:
+                self.rejected_dict[pair] = []
+            self.rejected_dict[pair].append([row[DATE_IDX], row[ENTER_TAG_IDX]])
 
     def backtest_loop(
             self, row: Tuple, pair: str, current_time: datetime, end_date: datetime,
@@ -1081,20 +1095,22 @@ class Backtesting:
         if (
             (self._position_stacking or len(LocalTrade.bt_trades_open_pp[pair]) == 0)
             and is_first
-            and self.trade_slot_available(open_trade_count_start)
             and current_time != end_date
             and trade_dir is not None
             and not PairLocks.is_pair_locked(pair, row[DATE_IDX], trade_dir)
         ):
-            trade = self._enter_trade(pair, row, trade_dir)
-            if trade:
-                # TODO: hacky workaround to avoid opening > max_open_trades
-                # This emulates previous behavior - not sure if this is correct
-                # Prevents entering if the trade-slot was freed in this candle
-                open_trade_count_start += 1
-                # logger.debug(f"{pair} - Emulate creation of new trade: {trade}.")
-                LocalTrade.add_bt_trade(trade)
-                self.wallets.update()
+            if (self.trade_slot_available(open_trade_count_start)):
+                trade = self._enter_trade(pair, row, trade_dir)
+                if trade:
+                    # TODO: hacky workaround to avoid opening > max_open_trades
+                    # This emulates previous behavior - not sure if this is correct
+                    # Prevents entering if the trade-slot was freed in this candle
+                    open_trade_count_start += 1
+                    # logger.debug(f"{pair} - Emulate creation of new trade: {trade}.")
+                    LocalTrade.add_bt_trade(trade)
+                    self.wallets.update()
+            else:
+                self._collate_rejected(pair, row)
 
         for trade in list(LocalTrade.bt_trades_open_pp[pair]):
             # 3. Process entry orders.
@@ -1159,6 +1175,8 @@ class Backtesting:
         while current_time <= end_date:
             open_trade_count_start = LocalTrade.bt_open_open_trade_count
             self.check_abort()
+            strategy_safe_wrapper(self.strategy.bot_loop_start, supress_error=True)(
+                current_time=current_time)
             for i, pair in enumerate(data):
                 row_index = indexes[pair]
                 row = self.validate_row(data, pair, row_index, current_time)
@@ -1234,8 +1252,8 @@ class Backtesting:
     def backtest_one_strategy(self, strat: IStrategy, data: Dict[str, DataFrame],
                               timerange: TimeRange):
         self.progress.init_step(BacktestState.ANALYZE, 0)
-
-        logger.info(f"Running backtesting for Strategy {strat.get_strategy_name()}")
+        strategy_name = strat.get_strategy_name()
+        logger.info(f"Running backtesting for Strategy {strategy_name}")
         backtest_start_time = datetime.now(timezone.utc)
         self._set_strategy(strat)
 
@@ -1270,36 +1288,20 @@ class Backtesting:
         )
         backtest_end_time = datetime.now(timezone.utc)
         results.update({
-            'run_id': self.run_ids.get(strat.get_strategy_name(), ''),
+            'run_id': self.run_ids.get(strategy_name, ''),
             'backtest_start_time': int(backtest_start_time.timestamp()),
             'backtest_end_time': int(backtest_end_time.timestamp()),
         })
-        self.all_results[self.strategy.get_strategy_name()] = results
+        self.all_results[strategy_name] = results
 
         if (self.config.get('export', 'none') == 'signals' and
                 self.dataprovider.runmode == RunMode.BACKTEST):
-            self._generate_trade_signal_candles(preprocessed_tmp, results)
+            self.processed_dfs[strategy_name] = generate_trade_signal_candles(
+                preprocessed_tmp, results)
+            self.rejected_df[strategy_name] = generate_rejected_signals(
+                preprocessed_tmp, self.rejected_dict)
 
         return min_date, max_date
-
-    def _generate_trade_signal_candles(self, preprocessed_df, bt_results):
-        signal_candles_only = {}
-        for pair in preprocessed_df.keys():
-            signal_candles_only_df = DataFrame()
-
-            pairdf = preprocessed_df[pair]
-            resdf = bt_results['results']
-            pairresults = resdf.loc[(resdf["pair"] == pair)]
-
-            if pairdf.shape[0] > 0:
-                for t, v in pairresults.open_date.items():
-                    allinds = pairdf.loc[(pairdf['date'] < v)]
-                    signal_inds = allinds.iloc[[-1]]
-                    signal_candles_only_df = pd.concat([signal_candles_only_df, signal_inds])
-
-                signal_candles_only[pair] = signal_candles_only_df
-
-        self.processed_dfs[self.strategy.get_strategy_name()] = signal_candles_only
 
     def _get_min_cached_backtest_date(self):
         min_backtest_date = None
@@ -1363,8 +1365,9 @@ class Backtesting:
 
             if (self.config.get('export', 'none') == 'signals' and
                     self.dataprovider.runmode == RunMode.BACKTEST):
-                store_backtest_signal_candles(
-                    self.config['exportfilename'], self.processed_dfs, dt_appendix)
+                store_backtest_analysis_results(
+                    self.config['exportfilename'], self.processed_dfs, self.rejected_df,
+                    dt_appendix)
 
         # Results may be mixed up now. Sort them so they follow --strategy-list order.
         if 'strategy_list' in self.config and len(self.results) > 0:

@@ -15,13 +15,15 @@ from freqtrade import __version__
 from freqtrade.constants import Config
 from freqtrade.exceptions import OperationalException
 from freqtrade.exchange.types import Tickers
-from freqtrade.plugins.pairlist.IPairList import IPairList
+from freqtrade.plugins.pairlist.IPairList import IPairList, PairlistParameter
 
 
 logger = logging.getLogger(__name__)
 
 
 class RemotePairList(IPairList):
+
+    is_pairlist_generator = True
 
     def __init__(self, exchange, pairlistmanager,
                  config: Config, pairlistconfig: Dict[str, Any],
@@ -62,6 +64,46 @@ class RemotePairList(IPairList):
         Short whitelist method description - used for startup-messages
         """
         return f"{self.name} - {self._pairlistconfig['number_assets']} pairs from RemotePairlist."
+
+    @staticmethod
+    def description() -> str:
+        return "Retrieve pairs from a remote API."
+
+    @staticmethod
+    def available_parameters() -> Dict[str, PairlistParameter]:
+        return {
+            "number_assets": {
+                "type": "number",
+                "default": 0,
+                "description": "Number of assets",
+                "help": "Number of assets to use from the pairlist.",
+            },
+            "pairlist_url": {
+                "type": "string",
+                "default": "",
+                "description": "URL to fetch pairlist from",
+                "help": "URL to fetch pairlist from",
+            },
+            **IPairList.refresh_period_parameter(),
+            "keep_pairlist_on_failure": {
+                "type": "boolean",
+                "default": True,
+                "description": "Keep last pairlist on failure",
+                "help": "Keep last pairlist on failure",
+            },
+            "read_timeout": {
+                "type": "number",
+                "default": 60,
+                "description": "Read timeout",
+                "help": "Request timeout for remote pairlist",
+            },
+            "bearer_token": {
+                "type": "string",
+                "default": "",
+                "description": "Bearer token",
+                "help": "Bearer token - used for auth against the upstream service.",
+            },
+        }
 
     def process_json(self, jsonparse) -> List[str]:
 
@@ -143,6 +185,9 @@ class RemotePairList(IPairList):
 
         if self._init_done:
             pairlist = self._pair_cache.get('pairlist')
+            if pairlist == [None]:
+                # Valid but empty pairlist.
+                return []
         else:
             pairlist = []
 
@@ -181,7 +226,11 @@ class RemotePairList(IPairList):
         pairlist = self._whitelist_for_active_markets(pairlist)
         pairlist = pairlist[:self._number_pairs]
 
-        self._pair_cache['pairlist'] = pairlist.copy()
+        if pairlist:
+            self._pair_cache['pairlist'] = pairlist.copy()
+        else:
+            # If pairlist is empty, set a dummy value to avoid fetching again
+            self._pair_cache['pairlist'] = [None]
 
         if time_elapsed != 0.0:
             self.log_once(f'Pairlist Fetched in {time_elapsed} seconds.', logger.info)

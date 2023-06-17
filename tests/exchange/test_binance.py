@@ -11,6 +11,19 @@ from tests.conftest import EXMS, get_mock_coro, get_patched_exchange, log_has_re
 from tests.exchange.test_exchange import ccxt_exceptionhandlers
 
 
+@pytest.mark.parametrize('side,type,time_in_force,expected', [
+    ('buy', 'limit', 'gtc', {'timeInForce': 'GTC'}),
+    ('buy', 'limit', 'IOC', {'timeInForce': 'IOC'}),
+    ('buy', 'market', 'IOC', {}),
+    ('buy', 'limit', 'PO', {'timeInForce': 'PO'}),
+    ('sell', 'limit', 'PO', {'timeInForce': 'PO'}),
+    ('sell', 'market', 'PO', {}),
+    ])
+def test__get_params_binance(default_conf, mocker, side, type, time_in_force, expected):
+    exchange = get_patched_exchange(mocker, default_conf, id='binance')
+    assert exchange._get_params(side, type, 1, False, time_in_force) == expected
+
+
 @pytest.mark.parametrize('trademode', [TradingMode.FUTURES, TradingMode.SPOT])
 @pytest.mark.parametrize('limitratio,expected,side', [
     (None, 220 * 0.99, "sell"),
@@ -35,11 +48,11 @@ def test_create_stoploss_order_binance(default_conf, mocker, limitratio, expecte
     default_conf['margin_mode'] = MarginMode.ISOLATED
     default_conf['trading_mode'] = trademode
     mocker.patch(f'{EXMS}.amount_to_precision', lambda s, x, y: y)
-    mocker.patch(f'{EXMS}.price_to_precision', lambda s, x, y: y)
+    mocker.patch(f'{EXMS}.price_to_precision', lambda s, x, y, **kwargs: y)
 
     exchange = get_patched_exchange(mocker, default_conf, api_mock, 'binance')
 
-    with pytest.raises(OperationalException):
+    with pytest.raises(InvalidOrderException):
         order = exchange.create_stoploss(
             pair='ETH/BTC',
             amount=1,
@@ -114,11 +127,11 @@ def test_create_stoploss_order_dry_run_binance(default_conf, mocker):
     order_type = 'stop_loss_limit'
     default_conf['dry_run'] = True
     mocker.patch(f'{EXMS}.amount_to_precision', lambda s, x, y: y)
-    mocker.patch(f'{EXMS}.price_to_precision', lambda s, x, y: y)
+    mocker.patch(f'{EXMS}.price_to_precision', lambda s, x, y, **kwargs: y)
 
     exchange = get_patched_exchange(mocker, default_conf, api_mock, 'binance')
 
-    with pytest.raises(OperationalException):
+    with pytest.raises(InvalidOrderException):
         order = exchange.create_stoploss(
             pair='ETH/BTC',
             amount=1,
@@ -501,7 +514,7 @@ def test_fill_leverage_tiers_binance_dryrun(default_conf, mocker, leverage_tiers
 
 def test_additional_exchange_init_binance(default_conf, mocker):
     api_mock = MagicMock()
-    api_mock.fapiPrivateGetPositionsideDual = MagicMock(return_value={"dualSidePosition": True})
+    api_mock.fapiPrivateGetPositionSideDual = MagicMock(return_value={"dualSidePosition": True})
     api_mock.fapiPrivateGetMultiAssetsMargin = MagicMock(return_value={"multiAssetsMargin": True})
     default_conf['dry_run'] = False
     default_conf['trading_mode'] = TradingMode.FUTURES
@@ -509,12 +522,12 @@ def test_additional_exchange_init_binance(default_conf, mocker):
     with pytest.raises(OperationalException,
                        match=r"Hedge Mode is not supported.*\nMulti-Asset Mode is not supported.*"):
         get_patched_exchange(mocker, default_conf, id="binance", api_mock=api_mock)
-    api_mock.fapiPrivateGetPositionsideDual = MagicMock(return_value={"dualSidePosition": False})
+    api_mock.fapiPrivateGetPositionSideDual = MagicMock(return_value={"dualSidePosition": False})
     api_mock.fapiPrivateGetMultiAssetsMargin = MagicMock(return_value={"multiAssetsMargin": False})
     exchange = get_patched_exchange(mocker, default_conf, id="binance", api_mock=api_mock)
     assert exchange
     ccxt_exceptionhandlers(mocker, default_conf, api_mock, 'binance',
-                           "additional_exchange_init", "fapiPrivateGetPositionsideDual")
+                           "additional_exchange_init", "fapiPrivateGetPositionSideDual")
 
 
 def test__set_leverage_binance(mocker, default_conf):
@@ -542,7 +555,6 @@ def test__set_leverage_binance(mocker, default_conf):
         "set_leverage",
         pair="XRP/USDT",
         leverage=5.0,
-        trading_mode=TradingMode.FUTURES
     )
 
 
