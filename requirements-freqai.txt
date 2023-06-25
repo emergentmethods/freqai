@@ -12,5 +12,7 @@ sanpy==0.11.5
 wordcloud==1.8.2.2
 pillow==9.4.0
 xgboost==1.7.5
+xgboost==1.7.6
 tensorboard==2.13.0
-datasieve==0.1.4
+datasieve==0.1.6
+optuna==3.2.0
