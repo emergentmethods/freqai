@@ -29,7 +29,8 @@ from freqtrade.exchange import timeframe_to_seconds
 from freqtrade.freqai.api_interface import FreqaiAPI
 from freqtrade.freqai.data_drawer import FreqaiDataDrawer
 from freqtrade.freqai.data_kitchen import FreqaiDataKitchen
-from freqtrade.freqai.utils import get_tb_logger, plot_feature_importance, record_params, PerformanceTracker
+from freqtrade.freqai.utils import (PerformanceTracker, get_tb_logger, plot_feature_importance,
+                                    record_params)
 from freqtrade.strategy.interface import IStrategy
 
 
@@ -1186,6 +1187,6 @@ class IFreqaiModel(ABC):
         if self.freqai_info.get("DI_threshold", 0) > 0:
             dk.DI_values = dk.feature_pipeline["di"].di_values
         else:
-            dk.DI_values = np.zeros(len(outliers.index))
-        dk.do_predict = outliers.to_numpy()
+            dk.DI_values = np.zeros(outliers.shape[0])
+        dk.do_predict = outliers
         return

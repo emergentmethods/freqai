@@ -96,6 +96,8 @@ def get_required_data_timerange(config: Config) -> TimeRange:
 
     return data_load_timerange
 
+# flake8: noqa: C901
+
 
 def plot_feature_importance(model: Any, pair: str, dk: FreqaiDataKitchen,
                             count_max: int = 200) -> None:
@@ -805,7 +807,7 @@ def plot_pca_correlation(pair: str, dk: FreqaiDataKitchen) -> None:
     :dk: non-persistent data container for current coin/loop
     """
 
-    if not dk.pca:
+    if not dk.feature_pipeline['pca']:
         logger.info('No PCA model exists for generating correlation plots')
         return
     else:
@@ -815,7 +817,8 @@ def plot_pca_correlation(pair: str, dk: FreqaiDataKitchen) -> None:
 
         correlation_matrix = get_pca_correlation(dk)
         corr_idx = correlation_matrix.index.str.lstrip('%-')
-        explained_variance_ratios = dk.pca.explained_variance_ratio_[:nmb_pcs]
+        explained_variance_ratios = dk.feature_pipeline['pca']._skl.explained_variance_ratio_[
+            :nmb_pcs]
 
         most_important_features, least_important_features = get_important_pca_features(dk)
 
@@ -879,7 +882,7 @@ def plot_pca_correlation(pair: str, dk: FreqaiDataKitchen) -> None:
         fig.update_layout(
             title_text=f'Correlation coefficients'
             f'\nfor the first {nmb_pcs} PCs '
-            f'({np.round(dk.pca.explained_variance_ratio_[:nmb_pcs].sum()*100,1)}% '
+            f'({np.round(dk.feature_pipeline["pca"]._skl.explained_variance_ratio_[:nmb_pcs].sum()*100,1)}% '
             f'explained variance) and the corresponding most and least important features'
         )
 
@@ -908,13 +911,14 @@ def get_pca_correlation(dk: FreqaiDataKitchen) -> pd.DataFrame:
     :df_loadings: dataframe containing the component loadings (correlation coefficients)
     for the features in the input dataframe
     """
-    if not dk.pca:
+    if not dk.feature_pipeline['pca']:
         logger.info('No PCA model exists')
         return
     else:
-        loadings = dk.pca.components_.T * np.sqrt(dk.pca.explained_variance_)
+        loadings = (dk.feature_pipeline['pca']._skl.components_.T *
+                    np.sqrt(dk.feature_pipeline['pca']._skl.explained_variance_))
         loadings = loadings.T
-        nmb_pcs = dk.pca.n_components_
+        nmb_pcs = dk.feature_pipeline['pca']._skl.n_components_
         pcs_list = [f'PC{str(i + 1)}' for i in range(nmb_pcs)]
         df_loadings = pd.DataFrame.from_dict(dict(zip(pcs_list, loadings)))
         df_loadings['Feature'] = dk.data['training_features_list_raw']
@@ -933,14 +937,15 @@ def get_important_pca_features(dk: FreqaiDataKitchen) -> Tuple:
     :df_least_important: dataframe linking the names of the least inluencial original features
     to the corresponding principal components
     """
-    if not dk.pca:
+    if not dk.feature_pipeline['pca']:
         logger.info('No PCA model exists')
         return None, None
     else:
-        nmb_pcs = dk.pca.n_components_
+        nmb_pcs = dk.feature_pipeline['pca']._skl.n_components_
         feature_names = dk.data['training_features_list_raw']
 
-        most_important_pcs = [np.abs(dk.pca.components_[i]).argmax() for i in range(nmb_pcs)]
+        most_important_pcs = [np.abs(dk.feature_pipeline['pca']._skl.components_[
+                                     i]).argmax() for i in range(nmb_pcs)]
         most_important_feature_names = [
             feature_names[most_important_pcs[i]] for i in range(nmb_pcs)
         ]
@@ -949,7 +954,8 @@ def get_important_pca_features(dk: FreqaiDataKitchen) -> Tuple:
             data=dic.items(), columns=['principal_component', 'feature_name']
         )
 
-        least_important_pcs = [np.abs(dk.pca.components_[i]).argmin() for i in range(nmb_pcs)]
+        least_important_pcs = [np.abs(dk.feature_pipeline['pca']._skl.components_[
+                                      i]).argmin() for i in range(nmb_pcs)]
         least_important_feature_names = [
             feature_names[least_important_pcs[i]] for i in range(nmb_pcs)
         ]
