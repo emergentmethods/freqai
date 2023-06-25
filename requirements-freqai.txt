@@ -7,7 +7,6 @@ scikit-learn==1.1.3
 joblib==1.2.0
 catboost==1.2; 'arm' not in platform_machine
 lightgbm==3.3.5
-tensorboard==2.12.0
 sanpy==0.11.5
 wordcloud==1.8.2.2
 pillow==9.4.0
