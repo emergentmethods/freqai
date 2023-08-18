@@ -166,17 +166,17 @@ def plot_feature_importance(model: Any, pair: str, dk: FreqaiDataKitchen,
                            f"importances {e}")
 
         # Plot wordcloud
-        train_vals = dk.freqai_config["model_training_parameters"].values()
+        # train_vals = dk.freqai_config["model_training_parameters"].values()
         try:
-            if "gpu_hist" in train_vals or "GPU" in train_vals:
-                # only do wordclouds for high performance runs
-                paths = dk.freqai_config.get("word_cloud_mask_paths",
-                                             ["user_data/plot/word_cloud_mask.jpg"])
-                img_path = random.choice(paths)
-                cloud = create_wordcloud(fi_df=fi_df, img_path=img_path)
-                filename = f'{dk.data_path}/{dk.model_filename}-{label}-wordcloud.png'
-                cloud.save(filename, 'PNG')
-                logger.info(f"Stored plot as {filename}")
+            # if "gpu_hist" in train_vals or "GPU" in train_vals:
+            # only do wordclouds for high performance runs
+            paths = dk.freqai_config.get("word_cloud_mask_paths",
+                                            ["user_data/plot/word_cloud_mask.jpg"])
+            img_path = random.choice(paths)
+            cloud = create_wordcloud(fi_df=fi_df, img_path=img_path)
+            filename = f'{dk.data_path}/{dk.model_filename}-{label}-wordcloud.png'
+            cloud.save(filename, 'PNG')
+            logger.info(f"Stored plot as {filename}")
         except Exception as e:
             logger.exception(f"Something went wrong making the word cloud for {pair}, {e}")
 
