@@ -193,10 +193,12 @@ class FreqaiAPI:
             self.dd.metric_slug_final.remove(f'{metric}/{slug}')
             return True
         if minInt_sec < stratInt_sec:
-            logger.warning(f'Removed {metric}/{slug} since its minimum interval was less'
-                           f' than  than strat tf. {minInt_sec} < {stratInt_sec}')
-            self.dd.metric_slug_final.remove(f'{metric}/{slug}')
-            return True
+            logger.warning(f'{metric}/{slug} since its minimum interval was less'
+                           f' than  than strat tf. {minInt_sec} < {stratInt_sec}. '
+                           "Changing minInterval to strat tf.")
+            meta_dict['minInterval'] = self.config['timeframe']
+            # self.dd.metric_slug_final.remove(f'{metric}/{slug}')
+            # return True
 
         self.dd.metric_update_tracker[f'{metric}/{slug}'] = {}
         self.dd.metric_update_tracker[f'{metric}/{slug}']['minInterval'] = meta_dict['minInterval']
@@ -231,7 +233,7 @@ class FreqaiAPI:
 
         for metric in get_many_dict.keys():
             slug1 = get_many_dict[metric]["slugs"][0]
-            start = datetime.fromtimestamp(get_many_dict[metric]["start"], tz=timezone.utc)
+            start = datetime.fromtimestamp(get_many_dict[metric]["start"], tz=timezone.utc) - timedelta(hours=24)
             batch.get_many(
                 metric,
                 slugs=get_many_dict[metric]["slugs"],
@@ -304,8 +306,8 @@ class FreqaiAPI:
             for slug in metric_dict[metric].columns:
                 metric_slug = f"{metric}/{slug}"
                 metric_dict[metric].rename(columns={f"{slug}": metric_slug}, inplace=True)
-                if (metric_dict[metric][metric_slug] == 0.0).all():
-                    logger.info(f'{metric_slug} is all zeros, removing it from metric '
+                if (metric_dict[metric][metric_slug] == 0.0).all() or metric_dict[metric][metric_slug].isnull().all():
+                    logger.info(f'{metric_slug} is all zeros or NaNs, removing it from metric '
                                 'list and never fetching again.')
                     to_remove.append(metric_slug)
                     continue
@@ -338,8 +340,8 @@ class FreqaiAPI:
         # metric_dict = dict(zip(self.metric_slug_temporary, response))
         metric_dict = dict(zip(get_many_dict.keys(), response))
         hist_df = self.dd.historic_external_data
-        metric_df = pd.DataFrame(np.nan, index=hist_df.index[-1:], columns=hist_df.columns)
-        hist_df = pd.concat([hist_df, metric_df], ignore_index=True, axis=0)
+        # metric_df = pd.DataFrame(np.nan, index=hist_df.index[-1:], columns=hist_df.columns)
+        # hist_df = pd.concat([hist_df, metric_df], ignore_index=True, axis=0)
 
         # for metric in self.metric_slug_temporary:
         for metric in get_many_dict.keys():
@@ -370,12 +372,18 @@ class FreqaiAPI:
                 self.dd.metric_update_tracker[f'{metric_slug}']['datetime_grabbed'] = datetime.now(
                     tz=timezone.utc)
 
-                idx = hist_df[hist_df['datetime'] >= dt].index
-                hist_df[metric_slug].iloc[idx] = metric_dict[metric][metric_slug].iloc[-1]
+                series_df = metric_dict[metric][metric_slug].reset_index()
+                series_df.columns = ['datetime', metric_slug]
+                merged_df = pd.merge(hist_df, series_df, on='datetime', how='outer', suffixes=('', '_from_series'))
+                merged_df[metric_slug] = merged_df[f"{metric_slug}_from_series"].combine_first(merged_df[metric_slug])
+                merged_df = merged_df.drop(columns=[f"{metric_slug}_from_series"])
+
+                hist_df = merged_df
+
                 logger.info(f'Successfully pulled new data for {metric_slug}')
 
-        hist_df['datetime'].iloc[-1] = hist_df['datetime'].iloc[-2] + timedelta(
-            seconds=timeframe_to_seconds(self.config['timeframe']))
+        # hist_df['datetime'].iloc[-1] = hist_df['datetime'].iloc[-2] + timedelta(
+        #     seconds=timeframe_to_seconds(self.config['timeframe']))
         hist_df.fillna(method='ffill', inplace=True)
         self.dd.historic_external_data = hist_df
         self.dd.save_historic_external_data_to_disk()
@@ -412,7 +420,7 @@ class FreqaiAPI:
         columns = []
         for metric in dataframe.columns:
             for shift in range(1, shifts + 1):
-                columns.append(f'{metric}_shift_{shift}')
+                columns.append(f'{metric}_shift-{shift}')
         shifted_df = DataFrame(
             np.zeros((len(dataframe.index), len(dataframe.columns) * shifts)),
             columns=columns, index=dataframe.index)
@@ -422,7 +430,7 @@ class FreqaiAPI:
             num_base_candles = timeframe_to_seconds(minInt) / base_tf_seconds
             for shift in range(1, shifts + 1):
                 candle_shift = int(shift * num_base_candles)
-                shifted_df[f'{metric}_shift_{shift}'] = dataframe[metric].shift(candle_shift)
+                shifted_df[f'{metric}_shift-{shift}'] = dataframe[metric].shift(candle_shift)
 
         dataframe = pd.concat([dataframe, shifted_df], axis=1)
 
