@@ -76,16 +76,6 @@ class FreqaiAPI:
 
         return execute_gql(execute_str)
 
-    # def batched_metric_execute(self, metrics, slugs)
-    #     mutation {
-    #     sql: computeRawClickhouseQuery(query: "SELECT dt, get_asset_name(asset_id) AS slug, get_metric_name(metric_id) AS metric, value\nFROM intraday_metrics\nWHERE \n    dt >= now() - interval 24 HOUR\n    AND asset_id IN (SELECT asset_id FROM asset_metadata WHERE name in ('bitcoin', 'ethereum', 'maker', 'uniswap'))\n    AND metric_id IN (SELECT metric_id FROM metric_metadata WHERE name in ('active_addresses_24h', 'transaction_volume', 'price_usd', 'volume_usd'))",
-    #     parameters: "{}") {
-    #         headers: columns
-    #         rows
-    #         types: columnTypes
-    #     }
-    #     }
-
     def create_metric_update_tracker(self) -> list:
 
         metrics_to_get = self.freqai_config['santiment_config']['metrics']
@@ -233,7 +223,8 @@ class FreqaiAPI:
 
         for metric in get_many_dict.keys():
             slug1 = get_many_dict[metric]["slugs"][0]
-            start = datetime.fromtimestamp(get_many_dict[metric]["start"], tz=timezone.utc) - timedelta(hours=24)
+            start = datetime.fromtimestamp(
+                get_many_dict[metric]["start"], tz=timezone.utc) - timedelta(hours=24)
             batch.get_many(
                 metric,
                 slugs=get_many_dict[metric]["slugs"],
@@ -306,7 +297,8 @@ class FreqaiAPI:
             for slug in metric_dict[metric].columns:
                 metric_slug = f"{metric}/{slug}"
                 metric_dict[metric].rename(columns={f"{slug}": metric_slug}, inplace=True)
-                if (metric_dict[metric][metric_slug] == 0.0).all() or metric_dict[metric][metric_slug].isnull().all():
+                if ((metric_dict[metric][metric_slug] == 0.0).all() or
+                        metric_dict[metric][metric_slug].isnull().all()):
                     logger.info(f'{metric_slug} is all zeros or NaNs, removing it from metric '
                                 'list and never fetching again.')
                     to_remove.append(metric_slug)
@@ -374,8 +366,10 @@ class FreqaiAPI:
 
                 series_df = metric_dict[metric][metric_slug].reset_index()
                 series_df.columns = ['datetime', metric_slug]
-                merged_df = pd.merge(hist_df, series_df, on='datetime', how='outer', suffixes=('', '_from_series'))
-                merged_df[metric_slug] = merged_df[f"{metric_slug}_from_series"].combine_first(merged_df[metric_slug])
+                merged_df = pd.merge(hist_df, series_df, on='datetime',
+                                     how='outer', suffixes=('', '_from_series'))
+                merged_df[metric_slug] = merged_df[f"{metric_slug}_from_series"].combine_first(
+                    merged_df[metric_slug])
                 merged_df = merged_df.drop(columns=[f"{metric_slug}_from_series"])
 
                 hist_df = merged_df
