@@ -240,7 +240,7 @@ class FreqaiAPI:
             try:
                 response = batch.execute()
             except Exception as e:
-                response = None
+                # response = None
                 logger.exception(f"Santiment api fetch encountered error {e}")
 
         else:
@@ -366,6 +366,9 @@ class FreqaiAPI:
 
                 series_df = metric_dict[metric][metric_slug].reset_index()
                 series_df.columns = ['datetime', metric_slug]
+                # first time around, we need a column ready?
+                # if metric_slug not in hist_df:
+                #     hist_df[metric_slug] = np.nan
                 merged_df = pd.merge(hist_df, series_df, on='datetime',
                                      how='outer', suffixes=('', '_from_series'))
                 merged_df[metric_slug] = merged_df[f"{metric_slug}_from_series"].combine_first(
