@@ -108,9 +108,8 @@ class IFreqaiModel(ABC):
         self.add_santiment_data = self.freqai_info['feature_parameters'].get(
             'include_santiment_data', False)
 
-        if self.freqai_info.get('freqai_api_url', None):
-            self.api_mode = self.freqai_info.get('freqai_api_mode', 'getter')
-            self.api = FreqaiAPI(config, self.dd, self.create_api_payload, self.api_mode)
+        if self.ft_params.get('include_santiment_data', None):
+            self.api = FreqaiAPI(config, self.dd)
 
         self.continual_learning = self.freqai_info.get('continual_learning', False)
         self.plot_features = self.ft_params.get("plot_feature_importances", 0)
@@ -1005,33 +1004,6 @@ class IFreqaiModel(ABC):
         :do_predict: np.array of 1s and 0s to indicate places where freqai needed to remove
         data (NaNs) or felt uncertain about data (i.e. SVM and/or DI index)
         """
-
-    def create_api_payload(self, dataframe: DataFrame, pair: str) -> dict:
-        """
-        Create the payload (schema) for posting to user set API
-        """
-
-        payload: Dict[Any, Any] = {}
-
-        return payload
-
-    # def fetch_predictions_for_getter(self, dataframe: DataFrame, metadata: dict):
-    #     # getter instance enters and exits here
-    #     if self.api_mode == 'getter':
-    #         dataframe = self.api.start_fetching_from_api(dataframe, metadata["pair"])
-    #         return dataframe
-    #     else:
-    #         logger.error('Strategy trying to get predictions from API, but not set to '
-    #                      'getter. Set freqai_api_mode to getter in config')
-
-    # @timer('function name', 's')
-    # def post_predictions(self, dataframe: DataFrame, metadata: dict) -> None:
-
-    #     if self.live and self.api_mode == "poster":
-    #         self.api.post_predictions(dataframe, metadata["pair"])
-    #     else:
-    #         logger.error('Strategy trying to post predictions to DB, but not set to '
-    #                      'poster. Set freqai_api_mode to poster in config')
 
     def update_external_data(self, dk: FreqaiDataKitchen):
         """

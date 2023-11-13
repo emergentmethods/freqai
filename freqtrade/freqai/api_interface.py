@@ -25,35 +25,14 @@ logger = logging.getLogger(__name__)
 
 class FreqaiAPI:
     """
-    Class designed to enable FreqAI "poster" instances to share predictions via API with other
-    FreqAI "getter" instances.
-    :param: config: dict = user provided config containing api token and url information
-    :param: data_drawer: FreqaiDataDrawer = persistent data storage associated with current
-    FreqAI instance.
-    :param: payload_fun: Callable = User defined schema for the "poster" FreqAI instance.
-    Defined in the IFreqaiModel (inherited prediction model class such as CatboostPredictionModel)
+    Class designed to interact with the santiment data source
     """
 
-    def __init__(self, config: dict, data_drawer: FreqaiDataDrawer,
-                 payload_func: Callable, mode: str):
+    def __init__(self, config: dict, data_drawer: FreqaiDataDrawer):
 
         self.config = config
         self.freqai_config = config.get('freqai', {})
-        self.api_token = self.freqai_config.get('freqai_api_token')
-        self.api_base_url = self.freqai_config.get('freqai_api_url')
-        self.post_url = f"{self.api_base_url}pairs"
         self.dd = data_drawer
-        self.create_api_payload = payload_func
-        if mode == 'getter':
-            self.headers = {
-                "X-BLOBR-KEY": self.api_token,
-                "Content-Type": "application/json"
-            }
-        else:
-            self.headers = {
-                "Authorization": self.api_token,
-                "Content-Type": "application/json"
-            }
         self.api_dict: Dict[str, Any] = {}
         self.num_posts = 0
         self.santiment_api_key = self.freqai_config.get(
