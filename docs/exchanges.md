@@ -55,7 +55,7 @@ This configuration enables kraken, as well as rate-limiting to avoid bans from t
 ## Binance
 
 !!! Warning "Server location and geo-ip restrictions"
-    Please be aware that binance restrict api access regarding the server country. The currents and non exhaustive countries blocked are United States, Malaysia (Singapour), Ontario (Canada). Please go to [binance terms > b. Eligibility](https://www.binance.com/en/terms) to find up to date list.
+    Please be aware that Binance restricts API access regarding the server country. The current and non-exhaustive countries blocked are Canada, Malaysia, Netherlands and United States. Please go to [binance terms > b. Eligibility](https://www.binance.com/en/terms) to find up to date list.
 
 Binance supports [time_in_force](configuration.md#understand-order_time_in_force).
 
@@ -136,13 +136,41 @@ Freqtrade will not attempt to change these settings.
 The Kraken API does only provide 720 historic candles, which is sufficient for Freqtrade dry-run and live trade modes, but is a problem for backtesting.
 To download data for the Kraken exchange, using `--dl-trades` is mandatory, otherwise the bot will download the same 720 candles over and over, and you'll not have enough backtest data.
 
-Due to the heavy rate-limiting applied by Kraken, the following configuration section should be used to download data:
+To speed up downloading, you can download the [trades zip files](https://support.kraken.com/hc/en-us/articles/360047543791-Downloadable-historical-market-data-time-and-sales-) kraken provides.
+These are usually updated once per quarter. Freqtrade expects these files to be placed in `user_data/data/kraken/trades_csv`.
 
-``` json
-    "ccxt_async_config": {
-        "enableRateLimit": true,
-        "rateLimit": 3100
-    },
+A structure as follows can make sense if using incremental files, with the "full" history in one directory, and incremental files in different directories.
+The assumption for this mode is that the data is downloaded and unzipped keeping filenames as they are.
+Duplicate content will be ignored (based on timestamp) - though the assumption is that there is no gap in the data.
+
+This means, if your "full" history ends in Q4 2022 - then both incremental updates Q1 2023 and Q2 2023 are available.
+Not having this will lead to incomplete data, and therefore invalid results while using the data.
+
+```
+└── trades_csv
+    ├── Kraken_full_history
+    │   ├── BCHEUR.csv
+    │   └── XBTEUR.csv
+    ├── Kraken_Trading_History_Q1_2023
+    │   ├── BCHEUR.csv
+    │   └── XBTEUR.csv
+    └── Kraken_Trading_History_Q2_2023
+        ├── BCHEUR.csv
+        └── XBTEUR.csv
+```
+
+You can convert these files into freqtrade files:
+
+``` bash
+freqtrade convert-trade-data --exchange kraken --format-from kraken_csv --format-to feather
+# Convert trade data to different ohlcv timeframes
+freqtrade trades-to-ohlcv -p BTC/EUR BCH/EUR --exchange kraken -t 1m 5m 15m 1h
+```
+
+The converted data also makes downloading data possible, and will start the download after the latest loaded trade.
+
+``` bash
+freqtrade download-data --exchange kraken --dl-trades -p BTC/EUR BCH/EUR 
 ```
 
 !!! Warning "Downloading data from kraken"
@@ -259,9 +287,16 @@ The configuration parameter `exchange.unknown_fee_rate` can be used to specify t
 
 Futures trading on bybit is currently supported for USDT markets, and will use isolated futures mode.
 Users with unified accounts (there's no way back) can create a Sub-account which will start as "non-unified", and can therefore use isolated futures.
-On startup, freqtrade will set the position mode to "One-way Mode" for the whole (sub)account. This avoids making this call over and over again (slowing down bot operations), but means that changes to this setting may result in exceptions and errors.
+On startup, freqtrade will set the position mode to "One-way Mode" for the whole (sub)account. This avoids making this call over and over again (slowing down bot operations), but means that changes to this setting may result in exceptions and errors
 
 As bybit doesn't provide funding rate history, the dry-run calculation is used for live trades as well.
+
+API Keys for live futures trading (Subaccount on non-unified) must have the following permissions:
+* Read-write
+* Contract - Orders
+* Contract - Positions
+
+We do strongly recommend to limit all API keys to the IP you're going to use it from.
 
 !!! Tip "Stoploss on Exchange"
     Bybit (futures only) supports `stoploss_on_exchange` and uses `stop-loss-limit` orders. It provides great advantages, so we recommend to benefit from it by enabling stoploss on exchange.

@@ -25,10 +25,10 @@ jobs:
     strategy:
       matrix:
         os: [ ubuntu-20.04, ubuntu-22.04 ]
-        python-version: ["3.8", "3.9", "3.10", "3.11"]
+        python-version: ["3.9", "3.10", "3.11"]
 
     steps:
-    - uses: actions/checkout@v3
+    - uses: actions/checkout@v4
 
     - name: Set up Python
       uses: actions/setup-python@v4
@@ -108,7 +108,7 @@ jobs:
 
     - name: Run Ruff
       run: |
-        ruff check --format=github .
+        ruff check --output-format=github .
 
     - name: Mypy
       run: |
@@ -127,10 +127,10 @@ jobs:
     strategy:
       matrix:
         os: [ macos-latest ]
-        python-version: ["3.8", "3.9", "3.10", "3.11"]
+        python-version: ["3.9", "3.10", "3.11"]
 
     steps:
-    - uses: actions/checkout@v3
+    - uses: actions/checkout@v4
 
     - name: Set up Python
       uses: actions/setup-python@v4
@@ -160,7 +160,8 @@ jobs:
     - name: Installation - macOS
       if: runner.os == 'macOS'
       run: |
-        brew update
+        # brew update
+        # TODO: Should be the brew upgrade
         # homebrew fails to update python due to unlinking failures
         # https://github.com/actions/runner-images/issues/6817
         rm /usr/local/bin/2to3 || true
@@ -216,7 +217,7 @@ jobs:
 
     - name: Run Ruff
       run: |
-        ruff check --format=github .
+        ruff check --output-format=github .
 
     - name: Mypy
       run: |
@@ -236,10 +237,10 @@ jobs:
     strategy:
       matrix:
         os: [ windows-latest ]
-        python-version: ["3.8", "3.9", "3.10", "3.11"]
+        python-version: ["3.9", "3.10", "3.11"]
 
     steps:
-    - uses: actions/checkout@v3
+    - uses: actions/checkout@v4
 
     - name: Set up Python
       uses: actions/setup-python@v4
@@ -286,7 +287,7 @@ jobs:
 
     - name: Run Ruff
       run: |
-        ruff check --format=github .
+        ruff check --output-format=github .
 
     - name: Mypy
       run: |
@@ -303,7 +304,7 @@ jobs:
   mypy_version_check:
     runs-on: ubuntu-22.04
     steps:
-    - uses: actions/checkout@v3
+    - uses: actions/checkout@v4
 
     - name: Set up Python
       uses: actions/setup-python@v4
@@ -318,7 +319,7 @@ jobs:
   pre-commit:
     runs-on: ubuntu-22.04
     steps:
-    - uses: actions/checkout@v3
+    - uses: actions/checkout@v4
 
     - uses: actions/setup-python@v4
       with:
@@ -328,7 +329,7 @@ jobs:
   docs_check:
     runs-on: ubuntu-22.04
     steps:
-    - uses: actions/checkout@v3
+    - uses: actions/checkout@v4
 
     - name: Documentation syntax
       run: |
@@ -358,7 +359,7 @@ jobs:
     # Run pytest with "live" checks
     runs-on: ubuntu-22.04
     steps:
-    - uses: actions/checkout@v3
+    - uses: actions/checkout@v4
 
     - name: Set up Python
       uses: actions/setup-python@v4
@@ -442,12 +443,12 @@ jobs:
     if: (github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'release') && github.repository == 'freqtrade/freqtrade'
 
     steps:
-    - uses: actions/checkout@v3
+    - uses: actions/checkout@v4
 
     - name: Set up Python
       uses: actions/setup-python@v4
       with:
-        python-version: "3.9"
+        python-version: "3.11"
 
     - name: Extract branch name
       shell: bash
@@ -460,7 +461,7 @@ jobs:
         python setup.py sdist bdist_wheel
 
     - name: Publish to PyPI (Test)
-      uses: pypa/gh-action-pypi-publish@v1.8.6
+      uses: pypa/gh-action-pypi-publish@v1.8.10
       if: (github.event_name == 'release')
       with:
         user: __token__
@@ -468,7 +469,7 @@ jobs:
         repository_url: https://test.pypi.org/legacy/
 
     - name: Publish to PyPI
-      uses: pypa/gh-action-pypi-publish@v1.8.6
+      uses: pypa/gh-action-pypi-publish@v1.8.10
       if: (github.event_name == 'release')
       with:
         user: __token__
@@ -514,7 +515,7 @@ jobs:
     if: (github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'release') && github.repository == 'freqtrade/freqtrade'
 
     steps:
-    - uses: actions/checkout@v3
+    - uses: actions/checkout@v4
 
     - name: Extract branch name
       shell: bash

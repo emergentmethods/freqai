@@ -92,8 +92,6 @@ class IFreqaiModel(ABC):
             logger.warning("DI threshold is not configured for Keras models yet. Deactivating.")
 
         self.CONV_WIDTH = self.freqai_info.get('conv_width', 1)
-        if self.ft_params.get("inlier_metric_window", 0):
-            self.CONV_WIDTH = self.ft_params.get("inlier_metric_window", 0) * 2
         self.class_names: List[str] = []  # used in classification subclasses
         self.pair_it = 0
         self.pair_it_train = 0
@@ -153,7 +151,6 @@ class IFreqaiModel(ABC):
         :param metadata: pair metadata coming from strategy.
         :param strategy: Strategy to train on
         """
-
         self.live = strategy.dp.runmode in (RunMode.DRY_RUN, RunMode.LIVE)
 
         self.dd.set_pair_dict_info(metadata)
@@ -412,6 +409,11 @@ class IFreqaiModel(ABC):
         dk: FreqaiDataKitchen = Data management/analysis tool associated to present pair only
         """
 
+        if not strategy.process_only_new_candles:
+            raise OperationalException("You are trying to use a FreqAI strategy with "
+                                       "process_only_new_candles = False. This is not supported "
+                                       "by FreqAI, and it is therefore aborting.")
+
         # get the model metadata associated with the current pair
         (_, trained_timestamp) = self.dd.get_pair_dict_info(metadata["pair"])
 
@@ -484,7 +486,7 @@ class IFreqaiModel(ABC):
             pred_df, do_preds = self.predict(dataframe, dk)
             if pair not in self.dd.historic_predictions:
                 self.set_initial_historic_predictions(pred_df, dk, pair, dataframe)
-            self.dd.set_initial_return_values(pair, pred_df)
+            self.dd.set_initial_return_values(pair, pred_df, dataframe)
 
             dk.return_dataframe = self.dd.attach_return_values_to_return_dataframe(pair, dataframe)
             return
@@ -544,7 +546,7 @@ class IFreqaiModel(ABC):
             ]
 
         if ft_params.get("principal_component_analysis", False):
-            pipe_steps.append(('pca', ds.PCA()))
+            pipe_steps.append(('pca', ds.PCA(n_components=0.999)))
             pipe_steps.append(('post-pca-scaler',
                                SKLearnWrapper(MinMaxScaler(feature_range=(-1, 1)))))
 
@@ -681,11 +683,11 @@ class IFreqaiModel(ABC):
         If the user reuses an identifier on a subsequent instance,
         this function will not be called. In that case, "real" predictions
         will be appended to the loaded set of historic predictions.
-        :param df: DataFrame = the dataframe containing the training feature data
-        :param model: Any = A model which was `fit` using a common library such as
-                      catboost or lightgbm
+        :param pred_df: DataFrame = the dataframe containing the predictions coming
+            out of a model
         :param dk: FreqaiDataKitchen = object containing methods for data analysis
         :param pair: str = current pair
+        :param strat_df: DataFrame = dataframe coming from strategy
         """
 
         self.dd.historic_predictions[pair] = pred_df
@@ -711,15 +713,6 @@ class IFreqaiModel(ABC):
         hist_preds_df['low_price'] = strat_df['low']
         hist_preds_df['close_price'] = strat_df['close']
         hist_preds_df['date_pred'] = strat_df['date']
-
-        # # for keras type models, the conv_window needs to be prepended so
-        # # viewing is correct in frequi
-        if self.ft_params.get('inlier_metric_window', 0):
-            n_lost_points = self.freqai_info.get('conv_width', 2)
-            zeros_df = DataFrame(np.zeros((n_lost_points, len(hist_preds_df.columns))),
-                                 columns=hist_preds_df.columns)
-            self.dd.historic_predictions[pair] = pd.concat(
-                [zeros_df, hist_preds_df], axis=0, ignore_index=True)
 
     def fit_live_predictions(self, dk: FreqaiDataKitchen, pair: str) -> None:
         """

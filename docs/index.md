@@ -63,6 +63,10 @@ Exchanges confirmed working by the community:
 - [X] [Bitvavo](https://bitvavo.com/)
 - [X] [Kucoin](https://www.kucoin.com/)
 
+## Community showcase
+
+--8<-- "includes/showcase.md"
+
 ## Requirements
 
 ### Hardware requirements
@@ -79,7 +83,7 @@ To run this bot we recommend you a linux cloud instance with a minimum of:
 
 Alternatively
 
-- Python 3.8+
+- Python 3.9+
 - pip (pip3)
 - git
 - TA-Lib

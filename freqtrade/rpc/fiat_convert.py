@@ -25,6 +25,9 @@ coingecko_mapping = {
     'bnb': 'binancecoin',
     'sol': 'solana',
     'usdt': 'tether',
+    'busd': 'binance-usd',
+    'tusd': 'true-usd',
+    'usdc': 'usd-coin',
 }
 
 

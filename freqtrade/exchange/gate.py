@@ -25,16 +25,16 @@ class Gate(Exchange):
     _ft_has: Dict = {
         "ohlcv_candle_limit": 1000,
         "order_time_in_force": ['GTC', 'IOC'],
-        "stoploss_order_types": {"limit": "limit"},
         "stoploss_on_exchange": True,
+        "stoploss_order_types": {"limit": "limit"},
+        "stop_price_param": "stopPrice",
+        "stop_price_prop": "stopPrice",
         "marketOrderRequiresPrice": True,
     }
 
     _ft_has_futures: Dict = {
         "needs_trading_fees": True,
         "marketOrderRequiresPrice": False,
-        "fee_cost_in_contracts": False,  # Set explicitly to false for clarity
-        "order_props_in_contracts": ['amount', 'filled', 'remaining'],
         "stop_price_type_field": "price_type",
         "stop_price_type_value_mapping": {
             PriceType.LAST: 0,
