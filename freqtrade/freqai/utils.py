@@ -8,8 +8,6 @@ from typing import Any, Dict, Tuple
 import numpy as np
 import pandas as pd
 import rapidjson
-from PIL import Image
-from wordcloud import ImageColorGenerator, WordCloud
 
 from freqtrade.configuration import TimeRange
 from freqtrade.constants import Config
@@ -165,21 +163,6 @@ def plot_feature_importance(model: Any, pair: str, dk: FreqaiDataKitchen,
             logger.warning("Something went wrong trying to pickle feature"
                            f"importances {e}")
 
-        # Plot wordcloud
-        # train_vals = dk.freqai_config["model_training_parameters"].values()
-        try:
-            # if "gpu_hist" in train_vals or "GPU" in train_vals:
-            # only do wordclouds for high performance runs
-            paths = dk.freqai_config.get("word_cloud_mask_paths",
-                                            ["user_data/plot/word_cloud_mask.jpg"])
-            img_path = random.choice(paths)
-            cloud = create_wordcloud(fi_df=fi_df, img_path=img_path)
-            filename = f'{dk.data_path}/{dk.model_filename}-{label}-wordcloud.png'
-            cloud.save(filename, 'PNG')
-            logger.info(f"Stored plot as {filename}")
-        except Exception as e:
-            logger.exception(f"Something went wrong making the word cloud for {pair}, {e}")
-
         if dk.freqai_config["feature_parameters"]["principal_component_analysis"]:
             plot_pca_correlation(pair, dk)
 
@@ -237,47 +220,6 @@ def make_feature_importance_df(
             if oldest_time_point < df.columns[0] - timedelta(days=window):
                 df_previous = df_previous.iloc[:, 1:]
             return pd.concat([df_previous, df], axis=1)
-
-
-def create_wordcloud(fi_df: pd.DataFrame, img_path: str) -> Image:
-    """
-    Create a word cloud for feature importances
-    """
-    # santiment_features = [f for f in fi_df['feature_names'] if '%%-' in f]
-
-    fi_df_santiment = fi_df  # .loc[fi_df["feature_names"].isin(santiment_features)].copy()
-
-    fi_df_santiment["feature_names"] = fi_df_santiment["feature_names"].apply(
-        lambda s: s.lstrip('%-'))
-    fi_df_santiment["feature_names"] = fi_df_santiment["feature_names"].apply(
-        lambda s: s.replace('_', ' '))
-
-    fi_df_shifts = fi_df_santiment.loc[fi_df_santiment["feature_names"].str.contains(
-        'shift')].copy()
-    fi_df_shifts["feature_names"] = fi_df_shifts["feature_names"].apply(
-        lambda s: s.split('shift')[0] + '(shift' + s.split('shift')[1] + ')')
-    fi_df_santiment.loc[fi_df_shifts.index, 'feature_names'] = fi_df_shifts["feature_names"]
-
-    # fi_df_eth = fi_df_santiment.loc[fi_df_santiment["feature_names"].str.contains(
-    #     'ethereum')].copy()
-    # fi_df_eth["feature_names"] = fi_df_eth["feature_names"].apply(
-    #     lambda s: s.replace('ethereum', 'ETH'))
-    # fi_df_santiment.loc[fi_df_eth.index, 'feature_names'] = fi_df_eth["feature_names"]
-
-    # fi_df_btc = fi_df_santiment.loc[fi_df_santiment["feature_names"].str.contains(
-    #     'bitcoin')].copy()
-    # fi_df_btc["feature_names"] = fi_df_btc["feature_names"].apply(
-    #     lambda s: s.replace('bitcoin', 'BTC'))
-    # fi_df_santiment.loc[fi_df_btc.index, 'feature_names'] = fi_df_btc["feature_names"]
-
-    mask = np.array(Image.open(img_path))
-    image_colors = ImageColorGenerator(mask)
-    wordcloud = WordCloud(background_color="rgba(255, 255, 255, 0)", mode="RGBA",
-                          mask=mask, max_font_size=100,
-                          random_state=42, width=200, height=200)
-
-    d = {a: x for a, x in fi_df_santiment.values}
-    return wordcloud.fit_words(d).recolor(color_func=image_colors).to_image()
 
 
 def record_params(config: Dict[str, Any], full_path: Path) -> None:
