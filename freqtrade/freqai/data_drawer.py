@@ -14,7 +14,6 @@ import numpy as np
 import pandas as pd
 import psutil
 import rapidjson
-from joblib import dump, load
 from joblib.externals import cloudpickle
 from numpy.typing import NDArray
 from pandas import DataFrame
@@ -396,9 +395,9 @@ class FreqaiDataDrawer:
         index = self.historic_predictions[pair].index[-1:]
         columns = self.historic_predictions[pair].columns
 
-        nan_df = pd.DataFrame(np.nan, index=index, columns=columns)
+        zeros_df = pd.DataFrame(np.zeros, index=index, columns=columns)
         self.historic_predictions[pair] = pd.concat(
-            [self.historic_predictions[pair], nan_df], ignore_index=True, axis=0)
+            [self.historic_predictions[pair], zeros_df], ignore_index=True, axis=0)
         df = self.historic_predictions[pair]
 
         # model outputs and associated statistics
@@ -562,7 +561,8 @@ class FreqaiDataDrawer:
 
         # Save the trained model
         if self.model_type == 'joblib':
-            dump(model, save_path / f"{dk.model_filename}_model.joblib")
+            with (save_path / f"{dk.model_filename}_model.joblib").open("wb") as fp:
+                cloudpickle.dump(model, fp)
         elif self.model_type == 'keras':
             model.save(save_path / f"{dk.model_filename}_model.h5")
         elif self.model_type in ["stable_baselines3", "sb3_contrib", "pytorch"]:
@@ -649,7 +649,8 @@ class FreqaiDataDrawer:
         if dk.live and coin in self.model_dictionary:
             model = self.model_dictionary[coin]
         elif self.model_type == 'joblib':
-            model = load(dk.data_path / f"{dk.model_filename}_model.joblib")
+            with (dk.data_path / f"{dk.model_filename}_model.joblib").open("rb") as fp:
+                model = cloudpickle.load(fp)
         elif 'stable_baselines' in self.model_type or 'sb3_contrib' == self.model_type:
             mod = importlib.import_module(
                 self.model_type, self.freqai_info['rl_config']['model_type'])
