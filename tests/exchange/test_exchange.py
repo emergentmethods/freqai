@@ -13,7 +13,7 @@ from freqtrade.enums import CandleType, MarginMode, TradingMode
 from freqtrade.exceptions import (DDosProtection, DependencyException, ExchangeError,
                                   InsufficientFundsError, InvalidOrderException,
                                   OperationalException, PricingError, TemporaryError)
-from freqtrade.exchange import (Binance, Bittrex, Exchange, Kraken, market_is_active,
+from freqtrade.exchange import (Binance, Bybit, Exchange, Kraken, market_is_active,
                                 timeframe_to_prev_date)
 from freqtrade.exchange.common import (API_FETCH_ORDER_RETRY_COUNT, API_RETRY_COUNT,
                                        calculate_backoff, remove_exchange_credentials)
@@ -55,7 +55,7 @@ get_entry_rate_data = [
     ('bid', 6, 5, None, 0, 5),  # last not available - uses bid
 ]
 
-get_sell_rate_data = [
+get_exit_rate_data = [
     ('bid', 12.0, 11.0, 11.5, 0.0, 11.0),  # full bid side
     ('bid', 12.0, 11.0, 11.5, 1.0, 11.5),  # full last side
     ('bid', 12.0, 11.0, 11.5, 0.5, 11.25),  # between bid and lat
@@ -228,10 +228,10 @@ def test_exchange_resolver(default_conf, mocker, caplog):
     assert log_has_re(r"No .* specific subclass found. Using the generic class instead.", caplog)
     caplog.clear()
 
-    default_conf['exchange']['name'] = 'Bittrex'
+    default_conf['exchange']['name'] = 'Bybit'
     exchange = ExchangeResolver.load_exchange(default_conf)
     assert isinstance(exchange, Exchange)
-    assert isinstance(exchange, Bittrex)
+    assert isinstance(exchange, Bybit)
     assert not log_has_re(r"No .* specific subclass found. Using the generic class instead.",
                           caplog)
     caplog.clear()
@@ -263,8 +263,8 @@ def test_exchange_resolver(default_conf, mocker, caplog):
 
 def test_validate_order_time_in_force(default_conf, mocker, caplog):
     caplog.set_level(logging.INFO)
-    # explicitly test bittrex, exchanges implementing other policies need separate tests
-    ex = get_patched_exchange(mocker, default_conf, id="bittrex")
+    # explicitly test bybit, exchanges implementing other policies need separate tests
+    ex = get_patched_exchange(mocker, default_conf, id="bybit")
     tif = {
         "buy": "gtc",
         "sell": "gtc",
@@ -273,11 +273,14 @@ def test_validate_order_time_in_force(default_conf, mocker, caplog):
     ex.validate_order_time_in_force(tif)
     tif2 = {
         "buy": "fok",
-        "sell": "ioc",
+        "sell": "ioc22",
     }
     with pytest.raises(OperationalException, match=r"Time in force.*not supported for .*"):
         ex.validate_order_time_in_force(tif2)
-
+    tif2 = {
+        "buy": "fok",
+        "sell": "ioc",
+    }
     # Patch to see if this will pass if the values are in the ft dict
     ex._ft_has.update({"order_time_in_force": ["GTC", "FOK", "IOC"]})
     ex.validate_order_time_in_force(tif2)
@@ -915,7 +918,6 @@ def test_validate_ordertypes(default_conf, mocker):
     mocker.patch(f'{EXMS}.validate_timeframes')
     mocker.patch(f'{EXMS}.validate_stakecurrency')
     mocker.patch(f'{EXMS}.validate_pricing')
-    mocker.patch(f'{EXMS}.name', 'Bittrex')
 
     default_conf['order_types'] = {
         'entry': 'limit',
@@ -2510,8 +2512,10 @@ def test_fetch_l2_order_book_exception(default_conf, mocker, exchange_name):
 
 @pytest.mark.parametrize("side,ask,bid,last,last_ab,expected", get_entry_rate_data)
 def test_get_entry_rate(mocker, default_conf, caplog, side, ask, bid,
-                        last, last_ab, expected) -> None:
+                        last, last_ab, expected, time_machine) -> None:
     caplog.set_level(logging.DEBUG)
+    start_dt = datetime(2023, 12, 1, 0, 10, 0, tzinfo=timezone.utc)
+    time_machine.move_to(start_dt, tick=False)
     if last_ab is None:
         del default_conf['entry_pricing']['price_last_balance']
     else:
@@ -2519,39 +2523,65 @@ def test_get_entry_rate(mocker, default_conf, caplog, side, ask, bid,
     default_conf['entry_pricing']['price_side'] = side
     exchange = get_patched_exchange(mocker, default_conf)
     mocker.patch(f'{EXMS}.fetch_ticker', return_value={'ask': ask, 'last': last, 'bid': bid})
+    log_msg = "Using cached entry rate for ETH/BTC."
 
     assert exchange.get_rate('ETH/BTC', side="entry", is_short=False, refresh=True) == expected
-    assert not log_has("Using cached entry rate for ETH/BTC.", caplog)
+    assert not log_has(log_msg, caplog)
 
+    time_machine.move_to(start_dt + timedelta(minutes=4), tick=False)
+    # Running a 2nd time without Refresh!
+    caplog.clear()
     assert exchange.get_rate('ETH/BTC', side="entry", is_short=False, refresh=False) == expected
-    assert log_has("Using cached entry rate for ETH/BTC.", caplog)
+    assert log_has(log_msg, caplog)
+
+    time_machine.move_to(start_dt + timedelta(minutes=6), tick=False)
+    # Running a 2nd time - forces refresh due to ttl timeout
+    caplog.clear()
+    assert exchange.get_rate('ETH/BTC', side="entry", is_short=False, refresh=False) == expected
+    assert not log_has(log_msg, caplog)
+
     # Running a 2nd time with Refresh on!
     caplog.clear()
     assert exchange.get_rate('ETH/BTC', side="entry", is_short=False, refresh=True) == expected
-    assert not log_has("Using cached entry rate for ETH/BTC.", caplog)
+    assert not log_has(log_msg, caplog)
 
 
-@pytest.mark.parametrize('side,ask,bid,last,last_ab,expected', get_sell_rate_data)
+@pytest.mark.parametrize('side,ask,bid,last,last_ab,expected', get_exit_rate_data)
 def test_get_exit_rate(default_conf, mocker, caplog, side, bid, ask,
-                       last, last_ab, expected) -> None:
+                       last, last_ab, expected, time_machine) -> None:
     caplog.set_level(logging.DEBUG)
+    start_dt = datetime(2023, 12, 1, 0, 10, 0, tzinfo=timezone.utc)
+    time_machine.move_to(start_dt, tick=False)
 
     default_conf['exit_pricing']['price_side'] = side
     if last_ab is not None:
         default_conf['exit_pricing']['price_last_balance'] = last_ab
     mocker.patch(f'{EXMS}.fetch_ticker', return_value={'ask': ask, 'bid': bid, 'last': last})
     pair = "ETH/BTC"
+    log_msg = "Using cached exit rate for ETH/BTC."
 
     # Test regular mode
     exchange = get_patched_exchange(mocker, default_conf)
     rate = exchange.get_rate(pair, side="exit", is_short=False, refresh=True)
-    assert not log_has("Using cached exit rate for ETH/BTC.", caplog)
+    assert not log_has(log_msg, caplog)
     assert isinstance(rate, float)
     assert rate == expected
     # Use caching
-    rate = exchange.get_rate(pair, side="exit", is_short=False, refresh=False)
-    assert rate == expected
-    assert log_has("Using cached exit rate for ETH/BTC.", caplog)
+    caplog.clear()
+    assert exchange.get_rate(pair, side="exit", is_short=False, refresh=False) == expected
+    assert log_has(log_msg, caplog)
+
+    time_machine.move_to(start_dt + timedelta(minutes=4), tick=False)
+    # Caching still active - TTL didn't expire
+    caplog.clear()
+    assert exchange.get_rate(pair, side="exit", is_short=False, refresh=False) == expected
+    assert log_has(log_msg, caplog)
+
+    time_machine.move_to(start_dt + timedelta(minutes=6), tick=False)
+    # Caching expired - refresh forced
+    caplog.clear()
+    assert exchange.get_rate(pair, side="exit", is_short=False, refresh=False) == expected
+    assert not log_has(log_msg, caplog)
 
 
 @pytest.mark.parametrize("entry,is_short,side,ask,bid,last,last_ab,expected", [
@@ -2647,9 +2677,9 @@ def test_get_exit_rate_exception(default_conf, mocker, is_short):
 @pytest.mark.parametrize("side,ask,bid,last,last_ab,expected", get_entry_rate_data)
 @pytest.mark.parametrize("side2", ['bid', 'ask'])
 @pytest.mark.parametrize("use_order_book", [True, False])
-def test_get_rates_testing_buy(mocker, default_conf, caplog, side, ask, bid,
-                               last, last_ab, expected,
-                               side2, use_order_book, order_book_l2) -> None:
+def test_get_rates_testing_entry(mocker, default_conf, caplog, side, ask, bid,
+                                 last, last_ab, expected,
+                                 side2, use_order_book, order_book_l2) -> None:
     caplog.set_level(logging.DEBUG)
     if last_ab is None:
         del default_conf['entry_pricing']['price_last_balance']
@@ -2683,10 +2713,10 @@ def test_get_rates_testing_buy(mocker, default_conf, caplog, side, ask, bid,
     assert api_mock.fetch_ticker.call_count == 1
 
 
-@pytest.mark.parametrize('side,ask,bid,last,last_ab,expected', get_sell_rate_data)
+@pytest.mark.parametrize('side,ask,bid,last,last_ab,expected', get_exit_rate_data)
 @pytest.mark.parametrize("side2", ['bid', 'ask'])
 @pytest.mark.parametrize("use_order_book", [True, False])
-def test_get_rates_testing_sell(default_conf, mocker, caplog, side, bid, ask,
+def test_get_rates_testing_exit(default_conf, mocker, caplog, side, bid, ask,
                                 last, last_ab, expected,
                                 side2, use_order_book, order_book_l2) -> None:
     caplog.set_level(logging.DEBUG)
@@ -2766,7 +2796,6 @@ async def test___async_get_candle_history_sort(default_conf, mocker, exchange_na
     assert res_ohlcv[9][4] == 0.07668
     assert res_ohlcv[9][5] == 16.65244264
 
-    # Bittrex use-case (real data from Bittrex)
     # This OHLCV data is ordered ASC (oldest first, newest last)
     ohlcv = [
         [1527827700000, 0.07659999, 0.0766, 0.07627, 0.07657998, 1.85216924],
@@ -3193,7 +3222,7 @@ def test_cancel_stoploss_order_with_result(default_conf, mocker, exchange_name):
     mocker.patch(f'{mock_prefix}.fetch_stoploss_order', side_effect=exc)
     co = exchange.cancel_stoploss_order_with_result(order_id='_', pair='TKN/BTC', amount=555)
     assert co['amount'] == 555
-    assert co == {'fee': {}, 'status': 'canceled', 'amount': 555, 'info': {}}
+    assert co == {'id': '_', 'fee': {}, 'status': 'canceled', 'amount': 555, 'info': {}}
 
     with pytest.raises(InvalidOrderException):
         exc = InvalidOrderException("Did not find order")
@@ -3410,7 +3439,7 @@ def test_get_fee(default_conf, mocker, exchange_name):
 
 
 def test_stoploss_order_unsupported_exchange(default_conf, mocker):
-    exchange = get_patched_exchange(mocker, default_conf, id='bittrex')
+    exchange = get_patched_exchange(mocker, default_conf, id='bitpanda')
     with pytest.raises(OperationalException, match=r"stoploss is not implemented .*"):
         exchange.create_stoploss(
             pair='ETH/BTC',
@@ -3606,10 +3635,10 @@ def test_ohlcv_candle_limit(default_conf, mocker, exchange_name):
     timeframes = ('1m', '5m', '1h')
     expected = exchange._ft_has['ohlcv_candle_limit']
     for timeframe in timeframes:
-        if 'ohlcv_candle_limit_per_timeframe' in exchange._ft_has:
-            expected = exchange._ft_has['ohlcv_candle_limit_per_timeframe'][timeframe]
-            # This should only run for bittrex
-            assert exchange_name == 'bittrex'
+        # if 'ohlcv_candle_limit_per_timeframe' in exchange._ft_has:
+        # expected = exchange._ft_has['ohlcv_candle_limit_per_timeframe'][timeframe]
+        # This should only run for bittrex
+        # assert exchange_name == 'bittrex'
         assert exchange.ohlcv_candle_limit(timeframe, CandleType.SPOT) == expected
 
 
@@ -4522,10 +4551,10 @@ def test_amount_to_contract_precision(
 
 
 @pytest.mark.parametrize('exchange_name,open_rate,is_short,trading_mode,margin_mode', [
-    # Bittrex
-    ('bittrex', 2.0, False, 'spot', None),
-    ('bittrex', 2.0, False, 'spot', 'cross'),
-    ('bittrex', 2.0, True, 'spot', 'isolated'),
+    # Bybit
+    ('bybit', 2.0, False, 'spot', None),
+    ('bybit', 2.0, False, 'spot', 'cross'),
+    ('bybit', 2.0, True, 'spot', 'isolated'),
     # Binance
     ('binance', 2.0, False, 'spot', None),
     ('binance', 2.0, False, 'spot', 'cross'),
@@ -4947,7 +4976,7 @@ def test_get_max_leverage_futures(default_conf, mocker, leverage_tiers):
         exchange.get_max_leverage("BTC/USDT:USDT", 1000000000.01)
 
 
-@pytest.mark.parametrize("exchange_name", ['bittrex', 'binance', 'kraken', 'gate', 'okx', 'bybit'])
+@pytest.mark.parametrize("exchange_name", ['binance', 'kraken', 'gate', 'okx', 'bybit'])
 def test__get_params(mocker, default_conf, exchange_name):
     api_mock = MagicMock()
     mocker.patch(f'{EXMS}.exchange_has', return_value=True)
