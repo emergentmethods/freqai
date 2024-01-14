@@ -51,6 +51,7 @@ class __RPCEntryExitMsgBase(RPCSendMsgBase):
     exchange: str
     pair: str
     base_currency: str
+    quote_currency: str
     leverage: Optional[float]
     direction: str
     limit: float
@@ -115,6 +116,9 @@ class RPCNewCandleMsg(RPCSendMsgBase):
     """New candle ping message, issued once per new candle/pair"""
     type: Literal[RPCMessageType.NEW_CANDLE]
     data: PairWithTimeframe
+
+
+RPCOrderMsg = Union[RPCEntryMsg, RPCExitMsg, RPCExitCancelMsg, RPCCancelMsg]
 
 
 RPCSendMsg = Union[
