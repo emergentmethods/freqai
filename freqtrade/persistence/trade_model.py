@@ -107,6 +107,11 @@ class Order(ModelBase):
         return self.amount or self.ft_amount
 
     @property
+    def safe_placement_price(self) -> float:
+        """Price at which the order was placed"""
+        return self.price or self.stop_price or self.ft_price
+
+    @property
     def safe_price(self) -> float:
         return self.average or self.price or self.stop_price or self.ft_price
 
@@ -553,6 +558,11 @@ class LocalTrade:
         )
 
     def to_json(self, minified: bool = False) -> Dict[str, Any]:
+        """
+        :param minified: If True, only return a subset of the data is returned.
+                         Only used for backtesting.
+        :return: Dictionary with trade data
+        """
         filled_or_open_orders = self.select_filled_or_open_orders()
         orders_json = [order.to_json(self.entry_side, minified) for order in filled_or_open_orders]
 
