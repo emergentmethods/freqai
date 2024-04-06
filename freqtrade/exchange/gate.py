@@ -104,8 +104,7 @@ class Gate(Exchange):
             pair=pair,
             params={'stop': True}
         )
-        if order.get('status', 'open') in ('closed', 'finish'):
-            # TODO: Should check for "finish" once ccxt 4.2.75 is available
+        if order.get('status', 'open') == 'closed':
             # Places a real order - which we need to fetch explicitly.
             val = 'trade_id' if self.trading_mode == TradingMode.FUTURES else 'fired_order_id'
 
@@ -115,6 +114,7 @@ class Gate(Exchange):
                 order1['id'] = order_id
                 order1['type'] = 'stoploss'
                 order1['stopPrice'] = order.get('stopPrice')
+                order1['status_stop'] = 'triggered'
 
                 return order1
         return order
